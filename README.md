@@ -10,6 +10,10 @@ It is a small Flask app that polls those APIs once a minute and serves the
 pages below on port 5000. Each integration is optional; pages for the ones
 you don't use are hidden.
 
+![Overview](docs/img/overview.png)
+
+<sub>Screenshots use anonymised demo data: names, addresses and MACs are made up.</sub>
+
 | Page | What it shows |
 |---|---|
 | Overview | Health of internet, APs, switches and clients; Wi-Fi service levels; busiest radios; worst links; WAN latency and traffic; client issues; recent events |
@@ -22,6 +26,30 @@ you don't use are hidden.
 | Wired Clients | Wired clients by switch, port and VLAN |
 | All Devices / Unaccounted | Everything the ARP scan finds, matched against Mist, Central and DHCP; devices no system accounts for |
 | Topology | WAN → firewall → switches → APs (→ clients), from LLDP |
+
+<details>
+<summary><b>More screenshots</b></summary>
+
+**Access points:** AP health and every radio's channel utilisation
+![Access points](docs/img/access-points.png)
+
+**WiFi health:** channel utilisation, worst links and client mix
+![WiFi health](docs/img/wifi-health.png)
+
+**Switches:** switch health and what is plugged into each port
+![Switches](docs/img/switches.png)
+
+**Client issues:** Mist connection failures by type and device
+![Client issues](docs/img/client-issues.png)
+
+**Topology**
+![Topology](docs/img/topology.png)
+
+**Dark mode and phone view**
+
+<img src="docs/img/overview-dark.png" alt="Overview in dark mode" width="68%"> <img src="docs/img/mobile.png" alt="Overview on a phone" width="28%">
+
+</details>
 
 ## Quick start
 
