@@ -1,0 +1,19 @@
+*.txt.token
+*token*.txt
+*token*.json
+*.jsonl
+*.cfseen
+*.bak*
+*.old-copy-*
+__pycache__/
+*.pyc
+venv/
+mnt/
+data/
+.env
+# Dashboard: site config and credentials stay local
+dashboard/config.yaml
+dashboard/secrets/
+dashboard/data/
+*.pem
+ntopng/.env

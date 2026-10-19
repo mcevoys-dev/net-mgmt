@@ -1,0 +1,54 @@
+# ntopng + netflow2ng flow monitoring stack
+# Based on the official synfinatic/netflow2ng docker-compose reference.
+# Two containers, both host-networked (required: NAT changes the NetFlow
+# source port, which breaks netflow2ng unless host networking is used).
+#
+# Pipeline:  OPNsense NetFlow v9 -> UDP/2055 -> netflow2ng -> ZMQ tcp/5556 -> ntopng (:3000)
+#
+# Redis: the ntop/ntopng image starts its own redis-server on 127.0.0.1:6379
+# (see /run.sh in the image), which is what --redis localhost reaches. A
+# separate redis container cannot bind that port on the host network, so there
+# is none. ntopng's users and settings live in that internal Redis; its data
+# directory is mounted from /opt/ntopng/redis so recreating the container
+# (for example after pulling a new image) keeps them.
+#
+# Place this at /opt/ntopng/compose.yaml, set LOCAL_NETWORKS in a .env file
+# next to it (see .env.example), create /opt/ntopng/data and /opt/ntopng/redis
+# (chown 101:102 /opt/ntopng/redis), then:
+#   cd /opt/ntopng && sudo docker compose up -d
+# Recreate later with --pull never unless you mean to upgrade ntopng.
+
+services:
+  netflow2ng:
+    image: synfinatic/netflow2ng:latest
+    container_name: netflow2ng
+    # Host networking is MANDATORY — NAT alters the inbound NetFlow source
+    # port and breaks flow decode if bridged.
+    network_mode: host
+    restart: unless-stopped
+    # netflow2ng listens on UDP/2055 (NetFlow in) and publishes ZMQ on tcp/5556.
+    # TLV is the default in current versions (no flag needed). Uncomment for debug:
+    # entrypoint: ["/netflow2ng", "--level=debug"]
+
+  ntopng:
+    image: ntop/ntopng:latest
+    container_name: ntopng
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - netflow2ng
+    # --community     : free edition
+    # --redis localhost: use the image's internal redis on 127.0.0.1:6379
+    # --interface tcp://localhost:5556 : read flows from netflow2ng's ZMQ publisher
+    # --local-networks : YOUR LAN(s), comma-separated, from LOCAL_NETWORKS in .env
+    # (login is left ENABLED — this data is sensitive. Default user admin/admin,
+    #  you'll be forced to set a password on first web login.)
+    command: >
+      --community
+      --redis localhost
+      --interface tcp://localhost:5556
+      --local-networks "${LOCAL_NETWORKS:-192.168.1.0/24}"
+      --insecure
+    volumes:
+      - /opt/ntopng/data:/var/lib/ntopng
+      - /opt/ntopng/redis:/var/lib/redis   # internal Redis (uid 101:102 in the image)

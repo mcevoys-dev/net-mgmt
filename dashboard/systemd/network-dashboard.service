@@ -1,0 +1,28 @@
+# Example systemd unit. Copy to /etc/systemd/system/, adjust User and the
+# paths, then:  sudo systemctl daemon-reload && sudo systemctl enable --now network-dashboard
+[Unit]
+Description=Network dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=netdash
+WorkingDirectory=/opt/network-dashboard
+ExecStart=/opt/network-dashboard/venv/bin/python3 /opt/network-dashboard/app.py --config /opt/network-dashboard/config.yaml
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+# Hardening. The app writes only data_dir and secrets_dir (the Aruba Central
+# token is refreshed and saved back to its file).
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/network-dashboard/data /opt/network-dashboard/secrets
+PrivateTmp=true
+# Leave NoNewPrivileges off: arp-scan gets its raw-socket permission from a
+# file capability (setcap cap_net_raw), which NoNewPrivileges=true would block.
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

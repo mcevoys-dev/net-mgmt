@@ -1,0 +1,10 @@
+#!/bin/bash
+# Blocks any commit whose staged files contain secret-shaped strings.
+# Enabled per clone with:  git config core.hooksPath .githooks
+REPO="$(git rev-parse --show-toplevel)"
+if ! python3 "$REPO/tools/scan_secrets.py" --staged; then
+  echo
+  echo "Commit blocked: possible secrets in staged files (see above)."
+  echo "Run: python3 tools/sanitize.py   then re-stage and commit."
+  exit 1
+fi

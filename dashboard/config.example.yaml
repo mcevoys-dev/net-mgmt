@@ -1,0 +1,112 @@
+# Network dashboard configuration.
+#
+# Copy this file to config.yaml (next to app.py) and edit it. Anything you
+# leave out uses the default shown here. Turn on only the integrations you
+# have; the dashboard hides the pages for the rest.
+#
+# Check your settings with:   python3 app.py --check
+# Every setting is described in docs/configuration.md.
+
+site:
+  name: Home Network              # shown in the header and browser tab
+  timezone: America/New_York      # IANA name, for times shown on the pages
+  lan_subnets:                    # scanned by arp-scan; anything else is "off network"
+    - 192.168.1.0/24
+
+server:
+  host: 0.0.0.0                   # 127.0.0.1 to only allow local access
+  port: 5000
+
+poll_interval: 60                 # seconds between refreshes from the APIs
+
+# Credential files are looked up here (relative to this file unless absolute).
+# Keep this directory readable only by the dashboard's user: chmod 700.
+secrets_dir: secrets
+# Event log and device history are written here.
+data_dir: data
+
+# ── Juniper Mist (Wi-Fi) ─────────────────────────────────────────────────────
+mist:
+  enabled: true
+  # Your Mist cloud: take the host you log in at (manage.<cloud>.mist.com)
+  # and swap "manage" for "api". manage.mist.com -> api.mist.com,
+  # manage.gc1.mist.com -> api.gc1.mist.com, and so on.
+  api_base: https://api.mist.com/api/v1
+  portal: https://manage.mist.com/admin   # used for "Open in Mist" links
+  org_id: ""                      # blank = read from the token
+  site_id: ""                     # blank = find the site by name below
+  site_name: Home                 # blank = first site in the org
+  token_file: mist_token.txt      # API token on one line
+
+# ── HPE Aruba Central (switches) ─────────────────────────────────────────────
+central:
+  enabled: false
+  # Your API gateway URL: Central > Organization > Platform Integration >
+  # API Gateway. For example https://apigw-prod2.central.arubanetworks.com
+  api_base: ""
+  site: Home                      # Central site name for wired clients; blank = all
+  token_file: central_token.json  # see docs/integrations.md for the format
+  switch_poll_seconds: 300
+
+# ── OPNsense (WAN links, DHCP) ───────────────────────────────────────────────
+opnsense:
+  enabled: false
+  url: https://192.168.1.1        # include :port if the web UI is not on 443
+  key_file: opnsense_apikey.txt   # the key file OPNsense downloads (key=/secret=)
+  verify_tls: false               # true if the firewall has a trusted certificate
+  # Optional: name and order your WAN links. "gateway" is the gateway name in
+  # System > Gateways; "interface" is the device (igb0, em0, vtnet0...), used
+  # for the traffic graphs. Leave the list out to show gateways as reported.
+  wans:
+    - gateway: WAN_GW
+      interface: igb0
+      name: Fiber
+      type: primary               # primary | backup
+      icon: fiber                 # fiber | cell | globe
+    # - gateway: LTE_GW
+    #   interface: igb2
+    #   name: LTE backup
+    #   type: backup
+    #   icon: cell
+
+# ── LAN discovery (arp-scan) ─────────────────────────────────────────────────
+arp_scan:
+  enabled: true
+  interval: 300                   # seconds
+  interface: ""                   # blank = arp-scan's default interface
+
+# ── Optional extras ──────────────────────────────────────────────────────────
+ntopng:                           # flow monitoring; feeds the assistant and a sidebar link
+  enabled: false
+  url: http://localhost:3000
+  public_url: ""                  # link used when the dashboard is reached from outside the LAN
+  token_file: ntopng_token.txt
+
+home_assistant:                   # publish network sensors to Home Assistant
+  enabled: false
+  url: http://homeassistant.local:8123
+  token_file: ha_token.txt        # long-lived access token
+
+assistant:                        # "Ask" panel, answered by Claude from the live snapshot
+  enabled: false
+  key_file: anthropic_key.txt
+  model: claude-opus-5-5
+  max_tokens: 16000
+
+# ── Your network's quirks ────────────────────────────────────────────────────
+inventory:
+  # MACs to count as infrastructure (controllers, NAS, firewall...) so they
+  # are not reported as unaccounted devices.
+  extra_infrastructure_macs: []
+  self_mac: ""                    # this machine's NIC, so it is not reported either
+  # Switch-to-switch uplinks Central does not report: downstream switch name ->
+  # text that appears in the upstream switch's name. Used by the Topology page.
+  switch_uplinks: {}
+  # Switches whose up/down changes should not be logged as events.
+  quiet_switches: []
+
+# Extra links for the sidebar's Tools section.
+links: []
+#  - name: NAS
+#    url: https://nas.local:5001
+#    icon: ext                    # fw | cloud | flow | ext | globe | switch | ap
