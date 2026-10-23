@@ -69,6 +69,11 @@ opnsense:
     #   type: backup
     #   icon: cell
 
+  # Firewall page: interfaces whose busiest devices to show (OPNsense names
+  # such as lan, opt1) and how many firewall log lines to summarise.
+  top_interfaces: [lan]
+  firewall_log_lines: 1000
+
 # ── LAN discovery (arp-scan) ─────────────────────────────────────────────────
 arp_scan:
   enabled: true

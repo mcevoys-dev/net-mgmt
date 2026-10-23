@@ -65,8 +65,19 @@ and DHCP leases (used to tell static from dynamic addresses).
    - DHCPv4 leases: `GET /api/dhcpv4/leases/searchLease`
    - interface statistics: `GET /api/diagnostics/interface/getInterfaceStatistics`
 
-   `python3 app.py --check` calls the gateway endpoint; if a page is missing
-   DHCP or traffic data, a privilege for one of the others is missing.
+   For the **Firewall** page, also:
+   - system status: `GET /api/diagnostics/system/system_time`, `system_resources`,
+     `system_disk`, `system_information`, `system_temperature`, and
+     `GET /api/diagnostics/activity/get_activity` (CPU)
+   - firmware status: `GET /api/core/firmware/status` (read only; the dashboard
+     never starts an update check)
+   - services: `GET /api/core/service/search`
+   - firewall log and state table: `GET /api/diagnostics/firewall/log`,
+     `firewall/stats`, `firewall/pf_statistics/info`, `firewall/pf_states`
+   - current bandwidth per device: `GET /api/diagnostics/traffic/top/<interface>`
+
+   `python3 app.py --check` calls the gateway endpoint and the Firewall-page
+   endpoints, and names any that are refused.
 2. On that user, under **API keys**, click **+**. OPNsense downloads a file
    containing `key=…` and `secret=…` lines; save it as
    `secrets/opnsense_apikey.txt`.

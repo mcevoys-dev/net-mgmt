@@ -37,6 +37,7 @@ import reconcile as reconcile_mod
 import mist_sle
 import mist_client_events
 from event_log import EventLog
+from opnsense_extras import OPNsenseExtras
 from ui import *  # noqa: F401,F403  page templates (BASE_HTML, OVERVIEW_HTML, ...)
 import ui as _ui
 
@@ -417,6 +418,16 @@ class OPNsenseClient:
     def traffic_stats(self):
         """Get cumulative interface byte counters for delta-based bps calculation."""
         return self.get("/api/diagnostics/interface/getInterfaceStatistics")
+
+# Firewall health, firmware, services, blocked traffic and top bandwidth.
+# Polled on its own thread (started in __main__) so the main poll stays fast.
+OPN_EXTRAS = OPNsenseExtras(
+    lambda path: OPNsenseClient().get(path),
+    CFG.site.lan_subnets,
+    top_interfaces=CFG.opnsense.top_interfaces,
+    log_lines=CFG.opnsense.firewall_log_lines,
+    on_event=lambda kind, sev, msg: _event_log.add(kind, sev, msg),
+) if CFG.opnsense.enabled else None
 
 # Track previous counters for delta calculation
 _prev_counters: dict = {}
@@ -1904,6 +1915,14 @@ def check_integrations() -> int:
             gw = OPNsenseClient().gateways()
             names = [g.get("name") for g in gw.get("items", gw.get("gateways", []))]
             results.append(line("OPNsense", True, f"gateways: {', '.join(names) or 'none'}"))
+            c = OPNsenseClient()
+            for path in ("/api/diagnostics/system/system_time", "/api/core/service/search",
+                         "/api/core/firmware/status", "/api/diagnostics/firewall/log?limit=1",
+                         *(f"/api/diagnostics/traffic/top/{i}" for i in CFG.opnsense.top_interfaces)):
+                try:
+                    c.get(path)
+                except Exception as e:
+                    results.append(line("OPNsense extra", False, f"{path.split('?')[0]}: {str(e)[:100]}"))
             missing = [w.gateway for w in WANS if w.gateway and w.gateway not in names]
             if missing:
                 results.append(line("OPNsense WANs", False, f"not reported by OPNsense: {', '.join(missing)}"))
@@ -1944,6 +1963,10 @@ if __name__ == "__main__":
 
     # Initial fetch in background so server starts immediately
     threading.Thread(target=poll_loop, daemon=True).start()
+
+    # Firewall health/services/log/bandwidth on their own cycle
+    if OPN_EXTRAS:
+        OPN_EXTRAS.start()
 
     # ARP scan runs on a separate, slower cycle
     if CFG.arp_scan.enabled:

@@ -30,7 +30,7 @@ def _set_timezone(name):
 __all__ = [
     "BASE_HTML", "OVERVIEW_HTML", "WIRELESS_HTML", "WIRED_HTML", "APS_HTML",
     "DEVICES_HTML", "GAP_HTML", "WHEALTH_HTML", "EVENTS_HTML",
-    "CLIENT_ISSUES_HTML", "TOPOLOGY_HTML", "SWITCHES_HTML",
+    "CLIENT_ISSUES_HTML", "TOPOLOGY_HTML", "SWITCHES_HTML", "FIREWALL_HTML",
 ]
 
 PER_PAGE = 100
@@ -459,6 +459,87 @@ def port_power(g):
     return out
 
 
+def ip_names(g):
+    """IP -> best-known device name, from Mist, Central, DHCP leases and the ARP scan."""
+    d = g["get_data"]()
+    names = {}
+    for h in g["_arp_cache"].get("hosts", []):
+        if h.get("ip") and h.get("hostname"):
+            names[h["ip"]] = h["hostname"]
+    for l in d.get("opnsense", {}).get("dhcp_leases", []):
+        if l.get("address") and l.get("hostname"):
+            names[l["address"]] = l["hostname"]
+    for c in d.get("central", {}).get("clients", []):
+        n = c.get("name") or c.get("hostname")
+        if c.get("ip_address") and n and n != "--" and n != c.get("macaddr"):
+            names[c["ip_address"]] = n
+    for c in d.get("mist", {}).get("clients", []):
+        if c.get("ip") and c.get("hostname"):
+            names[c["ip"]] = c["hostname"]
+    for a in d.get("mist", {}).get("aps", []):
+        if a.get("ip") and a.get("name"):
+            names[a["ip"]] = a["name"] + " (AP)"
+    return names
+
+
+def fmt_bits(b):
+    b = float(b or 0)
+    for unit, div in (("Gb/s", 1e9), ("Mb/s", 1e6), ("kb/s", 1e3)):
+        if b >= div:
+            return f"{b / div:.1f} {unit}"
+    return f"{b:.0f} b/s"
+
+
+def firewall_view(g):
+    ex = g.get("OPN_EXTRAS")
+    if not ex:
+        return None
+    s = ex.snapshot()
+    # Every field the page uses, empty until the first poll has run.
+    s["health"] = {**dict.fromkeys(("name", "version", "os", "uptime", "boottime", "config_changed", "cpu",
+                                    "mem_pct", "mem_total_mb", "disk_pct", "disk_free", "disk_total",
+                                    "temp", "states", "states_pct")), "load": [], **(s.get("health") or {})}
+    s["firmware"] = {**dict.fromkeys(("status", "message", "installed", "series", "next", "updates",
+                                      "download_size", "latest")), "update_available": False,
+                     "needs_reboot": False, **(s.get("firmware") or {})}
+    s["firewall"] = {"lines": 0, "blocks": 0, "passes": 0, "from": None, "to": None, "inbound_sources": [],
+                     "inbound_ports": [], "outbound_devices": [], "outbound_targets": [], "by_rule": [],
+                     "recent_blocks": [], "by_interface": [], "state_rate": None, **(s.get("firewall") or {})}
+    h, fw, svc = s["health"], s["firmware"], s.get("services") or []
+    stopped = [x for x in svc if not x["running"]]
+    notes = []
+    if stopped:
+        notes.append(("danger", f"{len(stopped)} service{'s' if len(stopped) != 1 else ''} stopped: "
+                      + ", ".join(x["description"] for x in stopped) + "."))
+    if fw.get("update_available"):
+        notes.append(("warn", f"Firmware update available{(': ' + fw['message']) if fw.get('message') else ''}"
+                      + (" (needs a reboot)" if fw.get("needs_reboot") else "") + "."))
+    elif fw and "check" in (fw.get("message") or "").lower():
+        notes.append(("info", "OPNsense has not checked for updates recently, so update status is unknown. "
+                      "Run a check in OPNsense under System → Firmware; this page shows the result "
+                      "of the last check (the dashboard never starts one itself)."))
+    if (h.get("disk_pct") or 0) >= 85:
+        notes.append(("warn", f"Firewall disk is {h['disk_pct']}% full."))
+    if (h.get("mem_pct") or 0) >= 90:
+        notes.append(("warn", f"Firewall memory is {h['mem_pct']}% used."))
+    if (h.get("states_pct") or 0) >= 80:
+        notes.append(("warn", f"State table is {h['states_pct']}% full."))
+    for sec, err in (s.get("errors") or {}).items():
+        notes.append(("danger", f"Could not read {sec} from OPNsense: {err}"))
+    return {**s, "stopped": stopped, "notes": notes, "names": ip_names(g),
+            "pending": not s.get("updated")}
+
+
+def firewall_summary(g):
+    """Counts for the Overview health table: (poor, fair, good) or None."""
+    v = firewall_view(g)
+    if not v or not v.get("services"):
+        return None
+    fair = int(bool((v.get("firmware") or {}).get("update_available"))) + int((v["health"].get("disk_pct") or 0) >= 85)
+    running = sum(1 for x in v["services"] if x["running"])
+    return (len(v["stopped"]), fair, running)
+
+
 def fmt_duration(s):
     s = int(s or 0)
     if s >= 86400:
@@ -497,6 +578,8 @@ def install(app, g):
         ui_client_mix=client_mix,
         ui_ap_health=lambda aps: ap_health(aps, port_power(g)),
         ui_band=lambda b: BAND_LABEL.get(str(b), b),
+        ui_fw_summary=lambda: firewall_summary(g),
+        ui_bits=fmt_bits,
         UTIL_WARN=UTIL_WARN, UTIL_BAD=UTIL_BAD, RETRY_WARN=RETRY_WARN, RETRY_BAD=RETRY_BAD,
     )
     app.jinja_env.filters["duration"] = fmt_duration
@@ -520,6 +603,13 @@ def install(app, g):
                                       last_updated=g["last_updated_str"](), v=switches_view(g))
 
     app.add_url_rule("/switches", "switches_page", switches_page)
+
+    def firewall_page():
+        return render_template_string(FIREWALL_HTML, title="Firewall", active="firewall",
+                                      last_updated=g["last_updated_str"](), v=firewall_view(g))
+
+    if cfg.opnsense.enabled:
+        app.add_url_rule("/firewall", "firewall_page", firewall_page)
     app.jinja_env.filters["local_time"] = local_time
 
     @app.context_processor
@@ -560,7 +650,7 @@ def install(app, g):
             "ui_site": cfg.site.name,
             "ui_links": links,
             "ui_has": {"mist": cfg.mist.enabled, "central": cfg.central.enabled,
-                       "assistant": cfg.assistant.enabled},
+                       "assistant": cfg.assistant.enabled, "opnsense": cfg.opnsense.enabled},
         }
 
 
@@ -593,6 +683,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
   ('Monitor', [
     ('home', '/', 'Overview', 'home', none),
     ('events', '/events', 'Events', 'clock', none),
+    ('firewall', '/firewall', 'Firewall', 'fw', none),
   ]),
   ('Wireless', [
     ('wireless', '/wireless', 'Wireless Clients', 'wifi', 'wireless'),
@@ -1032,7 +1123,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
   {% for sec, items in NAV if (sec != 'Wireless' or ui_has.mist) %}
   <div class="sb-sec">
     <div class="sb-sec-t">{{ sec }}</div>
-    {% for key, href, label, ic, cnt in items if ui_has.central or key not in ('switches', 'wired') %}
+    {% for key, href, label, ic, cnt in items if (ui_has.central or key not in ('switches', 'wired')) and (ui_has.opnsense or key != 'firewall') %}
     <a class="sb-link {{ 'active' if active == key }}" href="{{ href }}" title="{{ label }}">
       {{ icon(ic) }}<span class="sb-label">{{ label }}</span>
       {% if cnt and ui_counts.get(cnt) is not none %}<span class="sb-count {{ 'hot' if cnt == 'clientissues' and ui_counts[cnt] }}">{{ '{:,}'.format(ui_counts[cnt]) }}</span>{% endif %}
@@ -1394,6 +1485,8 @@ OVERVIEW_HTML = _page(r"""
         <thead><tr><th>Type</th><th></th><th style="text-align:right">Poor</th><th style="text-align:right">Fair</th><th style="text-align:right">Good</th></tr></thead>
         <tbody>
           {% if wan_cards %}{{ hrow('#internet', 'globe', 'Internet (WAN)', wan_bad, wan_warn, wan_cards|length - wan_bad - wan_warn) }}{% endif %}
+          {% set fws = ui_fw_summary() %}
+          {% if fws %}{{ hrow('/firewall', 'fw', 'Firewall services', fws[0], fws[1], fws[2]) }}{% endif %}
           {{ hrow('/aps', 'ap', 'Access points', ap_total - ap_up, 0, ap_up) }}
           {{ hrow('/switches', 'switch', 'Switches', switch_total - switch_up, 0, switch_up) }}
           {{ hrow('/wireless-health', 'wifi', 'Wireless clients', wifi_poor, wifi_fair, wifi_count - wifi_weak) }}
@@ -2503,4 +2596,143 @@ SWITCHES_HTML = _page(r"""
   </div>
 </section>
 {% endfor %}
+""")
+
+
+# ── Firewall ─────────────────────────────────────────────────────────────────
+
+FIREWALL_HTML = _page(r"""
+{% if not v %}
+<section class="card"><div class="empty">OPNsense is not enabled in config.yaml.</div></section>
+{% else %}
+{% set h, fw, fwl = v.health, v.firmware, v.firewall %}
+{% call page_head('Firewall', (h.version or 'OPNsense') ~ ((' · up ' ~ h.uptime) if h.uptime else '')) %}
+  <a class="btn" href="{{ ui_links | selectattr('name', 'equalto', 'OPNsense') | map(attribute='url') | first }}" target="_blank" rel="noopener">Open OPNsense {{ ext() }}</a>
+{% endcall %}
+{% if v.pending %}
+<div class="info-banner" style="margin:0 0 1rem">{{ icon('info') }}<span>Reading the firewall's status; this page fills in within a minute of the dashboard starting.</span></div>
+{% endif %}
+
+<div class="stats">
+  <div class="stat"><div class="stat-l">{{ icon('fw') }} Firmware</div>
+    <div class="stat-v {{ 'v-warn' if fw.update_available else ('v-good' if fw.status == 'none' and 'check' not in (fw.message or '')|lower else '') }}" style="font-size:1.25rem;margin-top:.5rem">{{ fw.installed or '—' }}</div>
+    <div class="stat-s">{% if fw.update_available %}<span class="warn">update available</span>{% elif 'check' in (fw.message or '')|lower %}not checked recently{% elif fw.status == 'none' %}up to date{% else %}{{ fw.status or '—' }}{% endif %}</div></div>
+  <div class="stat"><div class="stat-l">{{ icon('pulse') }} CPU</div>
+    <div class="stat-v {{ 'v-warn' if (h.cpu or 0) >= 80 else '' }}">{{ h.cpu if h.cpu is not none else '—' }}<small>{{ '%' if h.cpu is not none }}</small></div>
+    <div class="stat-s">load {{ h.load | join(' · ') if h.load else '—' }}</div></div>
+  <div class="stat"><div class="stat-l">{{ icon('devices') }} Memory</div>
+    <div class="stat-v {{ 'v-warn' if (h.mem_pct or 0) >= 90 else '' }}">{{ h.mem_pct if h.mem_pct is not none else '—' }}<small>{{ '%' if h.mem_pct is not none }}</small></div>
+    <div class="stat-s">of {{ ((h.mem_total_mb / 1024) | round(1)) ~ ' GB' if h.mem_total_mb else '—' }}</div></div>
+  <div class="stat"><div class="stat-l">{{ icon('switch') }} Disk</div>
+    <div class="stat-v {{ 'v-warn' if (h.disk_pct or 0) >= 85 else '' }}">{{ h.disk_pct if h.disk_pct is not none else '—' }}<small>{{ '%' if h.disk_pct is not none }}</small></div>
+    <div class="stat-s">{{ h.disk_free or '—' }} free of {{ h.disk_total or '—' }}</div></div>
+  <div class="stat"><div class="stat-l">{{ icon('topo') }} Connections</div>
+    <div class="stat-v">{{ '{:,}'.format(h.states) if h.states is not none else '—' }}</div>
+    <div class="stat-s">{{ (h.states_pct ~ '% of state table') if h.states_pct is not none else '' }}</div></div>
+  {% if h.temp %}<div class="stat"><div class="stat-l">{{ icon('pulse') }} Temperature</div><div class="stat-v">{{ h.temp | round | int }}<small> °C</small></div></div>{% endif %}
+</div>
+
+{% if v.notes %}
+<section class="card" style="margin-bottom:1rem">
+  <div class="card-h"><div><div class="card-t">{{ icon('info') }} Worth a look</div></div></div>
+  <div class="card-b" style="padding-top:.4rem"><ul class="notes">{% for sev, n in v.notes %}<li class="note-{{ sev }}">{{ n }}</li>{% endfor %}</ul></div>
+</section>
+{% endif %}
+
+<div class="grid">
+  <section class="card c5">
+    <div class="card-h"><div><div class="card-t">{{ icon('check') }} Services</div>
+      <div class="card-sub">{{ v.services | selectattr('running') | list | length }} of {{ v.services | length }} running{% if h.boottime %} · booted {{ h.boottime }}{% endif %}</div></div></div>
+    <div class="card-b flush">
+      {% if v.services %}
+      <table class="t"><tbody>
+        {% for sv in v.services %}
+        <tr><td style="width:1%"><i class="dot {{ 'good' if sv.running else 'danger' }}"></i></td>
+            <td style="padding-left:0"><span class="{{ '' if sv.running else 'danger' }}" style="font-weight:{{ 400 if sv.running else 700 }}">{{ sv.description }}</span></td>
+            <td class="r muted" style="font-size:.76rem">{{ 'running' if sv.running else 'stopped' }}</td></tr>
+        {% endfor %}
+      </tbody></table>
+      {% else %}<div class="empty">No service data yet.</div>{% endif %}
+    </div>
+  </section>
+
+  <section class="card c7">
+    <div class="card-h"><div><div class="card-t">{{ icon('flow') }} Top bandwidth right now</div>
+      <div class="card-sub">Busiest devices in the last few seconds, as measured by OPNsense</div></div></div>
+    <div class="card-b flush">
+      {% for ifname, recs in (v.top or {}).items() %}
+      {% if recs %}
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Device</th><th class="r">Total</th><th class="r" title="As counted on the {{ ifname }} interface">In / Out</th><th>Busiest peer</th></tr></thead>
+          <tbody>
+            {% set top = recs[0].rate or 1 %}
+            {% for r in recs[:10] %}
+            <tr>
+              <td><div class="dev-name">{{ v.names.get(r.address) or r.address }}</div>{% if v.names.get(r.address) %}<div class="dev-sub">{{ r.address }}</div>{% endif %}</td>
+              <td class="r" style="min-width:150px"><div class="mrow" style="grid-template-columns:1fr auto"><span></span><span class="mrow-v">{{ ui_bits(r.rate) }}</span>
+                <div class="mbar info"><span style="width:{{ [100 * r.rate / top, 2] | max }}%"></span></div></div></td>
+              <td class="r mono muted" style="white-space:nowrap">{{ ui_bits(r.rate_in) }}<br>{{ ui_bits(r.rate_out) }}</td>
+              <td class="mono muted" style="font-size:.76rem">{{ v.names.get(r.peer) or r.peer or '—' }}{% if r.peers > 1 %} <span class="muted">+{{ r.peers - 1 }}</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% else %}<div class="empty">No bandwidth sample yet.</div>{% endfor %}
+    </div>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-h"><div><div class="card-t">{{ icon('alert') }} Blocked traffic</div>
+    <div class="card-sub">{% if fwl.lines %}{{ '{:,}'.format(fwl.blocks) }} blocked of the last {{ '{:,}'.format(fwl.lines) }} firewall log entries{% if fwl.from %} ({{ fwl.from | local_time('%H:%M') }}–{{ fwl.to | local_time('%H:%M') }}){% endif %} · refreshed every 5 minutes{% else %}Reading the firewall log…{% endif %}</div></div></div>
+  {% if fwl.lines %}
+  <div class="card-b">
+    <div class="grid" style="margin:0">
+      {% for title, items, named in (('From the internet: top sources', fwl.inbound_sources, false),
+                                     ('Ports they tried', fwl.inbound_ports, false),
+                                     ('Your devices blocked going out', fwl.outbound_devices, true),
+                                     ('Where they were going', fwl.outbound_targets, false)) %}
+      <div class="c3">
+        <div class="stat-l" style="margin-bottom:.5rem">{{ title }}</div>
+        {% if items %}
+        {% set top = items[0][1] %}
+        <div class="mlist" style="gap:.45rem">
+          {% for k, n in items %}
+          <div class="mrow"><span class="mrow-l mono" style="font-weight:500;font-size:.78rem">{{ (v.names.get(k) ~ ' · ' ~ k) if named and v.names.get(k) else k }}</span><span class="mrow-v">{{ n }}</span>
+            <div class="mbar {{ 'warn' if named else 'info' }}"><span style="width:{{ [100 * n / top, 3] | max }}%"></span></div></div>
+          {% endfor %}
+        </div>
+        {% else %}<div class="note">None in this window.</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% if fwl.recent_blocks %}
+  <details>
+    <summary class="card-foot" style="cursor:pointer">Latest {{ fwl.recent_blocks | length }} blocked connections</summary>
+    <div class="table-wrap">
+      <table class="t">
+        <thead><tr><th>When</th><th>Interface</th><th>From</th><th>To</th><th>Rule</th></tr></thead>
+        <tbody>
+          {% for b in fwl.recent_blocks %}
+          <tr>
+            <td class="mono muted" style="white-space:nowrap">{{ b.ts | local_time('%H:%M:%S') }}</td>
+            <td class="muted">{{ b.interface }} {{ b.dir }}</td>
+            <td class="mono">{{ v.names.get(b.src) or b.src }}{% if b.srcport %}<span class="muted">:{{ b.srcport }}</span>{% endif %}</td>
+            <td class="mono">{{ v.names.get(b.dst) or b.dst }}{% if b.dstport %}<span class="muted">:{{ b.dstport }}</span>{% endif %} <span class="muted">{{ b.protoname }}</span></td>
+            <td class="muted" style="font-size:.76rem">{{ b.label or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+<style>.notes li.note-danger::before{background:var(--danger-dot)}.notes li.note-info::before{background:var(--info)}</style>
 """)

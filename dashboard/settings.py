@@ -49,6 +49,8 @@ DEFAULTS = {
         "key_file": "opnsense_apikey.txt",
         "verify_tls": False,
         "wans": [],
+        "top_interfaces": ["lan"],
+        "firewall_log_lines": 1000,
     },
     "arp_scan": {"enabled": True, "interval": 300, "interface": ""},
     "ntopng": {

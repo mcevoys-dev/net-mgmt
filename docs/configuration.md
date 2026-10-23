@@ -62,6 +62,8 @@ with a message naming the setting, so a typo never fails silently.
 | `key_file` | `opnsense_apikey.txt` | The `key=` / `secret=` file OPNsense downloads |
 | `verify_tls` | `false` | Check the firewall's certificate |
 | `wans` | `[]` | Optional list describing your WAN links, in display order (below) |
+| `top_interfaces` | `[lan]` | OPNsense interface names (as in its config: `lan`, `opt1`…) whose busiest devices the Firewall page shows |
+| `firewall_log_lines` | `1000` | How many recent firewall log entries the blocked-traffic summary reads (every 5 minutes) |
 
 Each entry in `wans`:
 
