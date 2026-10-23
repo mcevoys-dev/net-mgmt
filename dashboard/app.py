@@ -27,6 +27,7 @@ import requests
 import urllib3
 from flask import Flask, jsonify, render_template_string, request
 
+import admin
 import settings
 from gap_analysis import analyze_gap
 from wireless_health import analyze_wireless_health
@@ -1878,6 +1879,7 @@ def api_status():
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 _ui.install(app, globals())
+admin.install(app, globals())
 
 
 def check_integrations() -> int:
@@ -1954,9 +1956,14 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Network dashboard")
     ap.add_argument("--config", help="path to config.yaml (default: next to app.py, or $NETDASH_CONFIG)")
     ap.add_argument("--check", action="store_true", help="test each enabled integration and exit")
+    ap.add_argument("--set-admin-password", action="store_true",
+                    help="set the password for Settings → Credentials, then exit")
     args = ap.parse_args()
     if args.check:
         sys.exit(check_integrations())
+    if args.set_admin_password:
+        admin.set_password(CFG)
+        sys.exit(0)
 
     # Load persisted device seen-history before scanning begins
     load_seen_history()

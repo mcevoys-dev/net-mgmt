@@ -53,6 +53,18 @@ prints `OK` or `FAIL` with the reason. A config mistake (unknown setting, bad
 subnet, missing Central URL…) is reported by name before anything runs. Fix
 anything marked `FAIL` before continuing.
 
+## 3b. Optional: admin password for Settings → Credentials
+
+To change API keys from the browser instead of editing files, set an admin
+password (12+ characters; only a salted hash is stored in `secrets_dir`):
+
+```bash
+sudo -u netdash venv/bin/python3 app.py --set-admin-password
+```
+
+Then use **Admin → Credentials** in the sidebar. See
+[security.md](security.md#the-credentials-page) before using it over plain HTTP.
+
 ## 4. Run as a service
 
 ```bash

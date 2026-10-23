@@ -77,6 +77,7 @@ DEFAULTS = {
         "quiet_switches": [],
     },
     "links": [],
+    "admin": {"password_file": "admin_password", "session_minutes": 15},
 }
 
 WAN_DEFAULTS = {"gateway": "", "interface": "", "name": "", "type": "primary",

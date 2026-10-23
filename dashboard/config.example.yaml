@@ -110,6 +110,12 @@ inventory:
   # Switches whose up/down changes should not be logged as events.
   quiet_switches: []
 
+# Admin → Credentials (change API keys from the browser). Locked until you run
+#   python3 app.py --set-admin-password
+admin:
+  password_file: admin_password   # hash only, in secrets_dir
+  session_minutes: 15
+
 # Extra links for the sidebar's Tools section.
 links: []
 #  - name: NAS

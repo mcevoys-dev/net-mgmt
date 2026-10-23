@@ -27,6 +27,7 @@ you don't use are hidden.
 | Wired Clients | Wired clients by switch, port and VLAN |
 | All Devices / Unaccounted | Everything the ARP scan finds, matched against Mist, Central and DHCP; devices no system accounts for |
 | Topology | WAN → firewall → switches → APs (→ clients), from LLDP |
+| Admin → Credentials | Replace any integration's API key or token from the browser (admin password required; keys are tested before saving and never shown) |
 
 <details>
 <summary><b>More screenshots</b></summary>

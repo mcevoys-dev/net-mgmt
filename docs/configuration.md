@@ -122,6 +122,13 @@ traffic is tracked on every interface OPNsense reports.
 | `switch_uplinks` | `{}` | `downstream switch name: text in upstream switch name`, for the Topology page when Central does not report switch-to-switch links |
 | `quiet_switches` | `[]` | Switch names whose up/down changes are not logged |
 
+## admin
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `password_file` | `admin_password` | File in `secrets_dir` holding the admin password hash; created by `app.py --set-admin-password`. The Credentials page stays locked until it exists. |
+| `session_minutes` | `15` | Idle time before an admin session ends |
+
 ## links
 
 Extra sidebar links under **Tools**. Each needs `name` and `url`; `icon` is one

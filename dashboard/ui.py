@@ -698,6 +698,9 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
     ('gap', '/gap', 'Unaccounted', 'search', none),
     ('topology', '/topology', 'Topology', 'topo', none),
   ]),
+  ('Admin', [
+    ('credentials', '/settings/credentials', 'Credentials', 'fw', none),
+  ]),
 ] -%}
 {%- set CRUMB = {} -%}
 {%- for sec, items in NAV -%}{%- for key, href, label, ic, cnt in items -%}{%- set _ = CRUMB.update({key: (sec, label)}) -%}{%- endfor -%}{%- endfor -%}

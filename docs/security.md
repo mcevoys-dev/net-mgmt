@@ -15,6 +15,27 @@ firewall.
 - If the **Ask** panel is on, anyone who can reach the dashboard can spend
   your Claude API credit. Put it behind authentication before exposing it.
 
+## The Credentials page
+
+**Admin → Credentials** replaces API keys and tokens from the browser. It is
+locked until an admin password is set on the server
+(`app.py --set-admin-password`), and:
+
+- never shows a stored key, even to the admin; it only replaces them;
+- cannot change any address (URL) a key is sent to, so it cannot be used to
+  redirect a key to someone else's server; addresses live in `config.yaml`;
+- tests each new key with one read-only call before saving it;
+- writes key files owner-only (0600) and keeps the previous one as
+  `<file>.previous`; logs each change on the Events page without the key;
+- rate-limits sign-in (5 failures per address, 20 overall, per 5 minutes),
+  protects every form with a CSRF token, and ends sessions after
+  `admin.session_minutes` idle.
+
+The sign-in password travels with the request, so over plain `http://` it
+can be read by anyone able to watch your LAN traffic. Use the page through an
+HTTPS address (for example a Cloudflare Tunnel hostname or a reverse proxy
+with TLS), or only from a network you trust.
+
 ## Credentials
 
 - Keep credentials in `secrets_dir`, owned by the dashboard's user, with
