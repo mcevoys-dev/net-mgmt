@@ -190,9 +190,17 @@ class SynologyMonitor:
             missing["utilization"] = why
             util = {}
         storage, why = self._part("SYNO.Storage.CGI.Storage", 1, "load_info")
+        source = "Storage Manager"
         if storage is None:
-            missing["storage"] = why
-            storage = {}
+            # Storage Manager needs an administrator. Info Center's storage view
+            # (allowed for the "System monitoring" delegated role) has each disk's
+            # health and temperature and each volume's state and space.
+            ic, why2 = self._part("SYNO.Core.System", 1, "info", type="storage")
+            if ic is None:
+                missing["storage"] = why
+                storage = {}
+            else:
+                storage, source = from_info_center(ic), "Info Center"
         upgrade, why = self._part("SYNO.Core.Upgrade.Server", 1, "check")
         if upgrade is None:
             missing["update"] = why
@@ -222,6 +230,7 @@ class SynologyMonitor:
                 "bad_sectors": d.get("unc") if isinstance(d.get("unc"), int) else None,
                 "pool": d.get("used_by") or "",
                 "firmware": d.get("firm") or "",
+                "testing": d.get("testing"),
             })
         pools = []
         for p in storage.get("storagePools") or []:
@@ -269,7 +278,7 @@ class SynologyMonitor:
             "ram_gb": round(int(info["ram_size"]) / 1024, 1) if str(info.get("ram_size") or "").isdigit() else None,
             "cpu": cpu_pct, "mem": mem.get("real_usage"),
             "disks": disks, "pools": pools, "volumes": volumes,
-            "dsm_update": update, "ups": ups_view, "missing": missing,
+            "dsm_update": update, "ups": ups_view, "missing": missing, "source": source,
             "warn_pct": self.volume_warn, "temp_limit": self.temp_warn,
         }
 
@@ -311,6 +320,26 @@ class SynologyMonitor:
                                   f"NAS volume {x['name']} is {x['used_pct']}% full ({x['free_gb']} GB free).")
         if (view["dsm_update"] or {}).get("available") and not (prev["dsm_update"] or {}).get("available"):
             self.on_event("nas_update", "info", f"A DSM update is available: {view['dsm_update']['version'] or 'new version'}.")
+
+
+def from_info_center(ic):
+    """Info Center's storage info, in the shape Storage Manager's load_info uses."""
+    disks = [{
+        "id": d.get("diskPath") or d.get("diskno"), "longName": d.get("diskno"),
+        "model": d.get("model"), "vendor": "", "diskType": d.get("diskType"),
+        "size_total": d.get("capacity"), "status": d.get("status"),
+        "smart_status": "", "overview_status": d.get("overview_status") or d.get("summary_status_key"),
+        "temp": d.get("temp"), "used_by": d.get("volume"),
+        "testing": d.get("testing_type") if d.get("testing_type") not in (None, "", "idle") else None,
+        "order": d.get("order"),
+    } for d in ic.get("hdd_info") or []]
+    disks.sort(key=lambda d: (d["order"] is None, d["order"] or 0))
+    volumes = [{
+        "id": v.get("volume") or v.get("name"), "display_name": _pretty_id(v.get("volume") or v.get("name") or "volume"),
+        "status": v.get("status"), "fs_type": "",
+        "size": {"total": v.get("total_size"), "used": v.get("used_size")},
+    } for v in ic.get("vol_info") or []]
+    return {"disks": disks, "volumes": volumes, "storagePools": []}
 
 
 def disk_ok(d):

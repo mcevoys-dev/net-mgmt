@@ -125,9 +125,13 @@ def nas_view(g):
     notes = []
     if s.get("error"):
         notes.append(("danger", f"Last poll of the NAS failed: {s['error']}"))
-    for part, why in (s.get("missing") or {}).items():
-        notes.append(("info", f"Could not read {part}: {why}."
-                      + (" Storage Manager needs an account in the administrators group." if part == "storage" else "")))
+    missing = dict(s.get("missing") or {})
+    if missing.pop("storage", None):
+        notes.append(("warn", "This account cannot read disks or volumes. Give it the System monitoring "
+                              "delegated role (Info Center), or add it to the administrators group."))
+    if missing:
+        label = {"update": "DSM update check", "utilization": "CPU and memory", "system": "model and DSM version"}
+        notes.append(("info", "Not readable by this account: " + ", ".join(label.get(k, k) for k in sorted(missing)) + "."))
     for d in s["disks"]:
         if not synology_mon.disk_ok(d):
             notes.append(("danger", f"Disk {d['name']} ({d['model']}) reports {synology_mon.disk_problem(d)}."))
@@ -392,10 +396,10 @@ NAS_BODY = r"""
 <div class="stats">
   <div class="stat"><div class="stat-l">{{ icon('disk') }} Disks</div>
     <div class="stat-v {{ 'v-good' if n_ok.d == v.disks | length else 'v-danger' }}">{{ n_ok.d }}<small>/{{ v.disks | length }}</small></div>
-    <div class="stat-s">healthy (status and SMART)</div></div>
+    <div class="stat-s">healthy{{ ' (status and SMART)' if v.source != 'Info Center' }}</div></div>
   <div class="stat"><div class="stat-l">{{ icon('server') }} Volumes</div>
     <div class="stat-v {{ 'v-good' if vols_ok == v.volumes | length else 'v-danger' }}">{{ vols_ok }}<small>/{{ v.volumes | length }}</small></div>
-    <div class="stat-s">{% for p in v.pools %}{{ p.raid }}{{ ', ' if not loop.last }}{% else %}no pools read{% endfor %}</div></div>
+    <div class="stat-s">{% for p in v.pools %}{{ p.raid }}{{ ', ' if not loop.last }}{% else %}{{ 'normal state' if vols_ok == v.volumes | length else 'need attention' }}{% endfor %}</div></div>
   <div class="stat"><div class="stat-l">{{ icon('pulse') }} Hottest disk</div>
     <div class="stat-v {{ 'v-warn' if n_ok.hot >= v.temp_limit }}">{{ n_ok.hot or '—' }}<small>{{ ' °C' if n_ok.hot }}</small></div>
     <div class="stat-s">{% if v.temp %}system {{ v.temp }} °C{% else %}warning at {{ v.temp_limit }} °C{% endif %}</div></div>
@@ -409,7 +413,7 @@ NAS_BODY = r"""
 </div>
 """ + NOTES + r"""
 <div class="grid">
-  <section class="card c6">
+  <section class="card {{ 'c6' if v.pools or v.ups else 'c12' }}">
     <div class="card-h"><div><div class="card-t">{{ icon('server') }} Volumes</div><div class="card-sub">Space and state; warning at {{ v.warn_pct }}%</div></div></div>
     <div class="card-b"><div class="mlist" style="gap:.55rem">
       {% for x in v.volumes %}
@@ -420,6 +424,7 @@ NAS_BODY = r"""
       {% else %}<div class="muted">No volumes read{% if v.missing.storage %} ({{ v.missing.storage }}){% endif %}.</div>{% endfor %}
     </div></div>
   </section>
+  {% if v.pools or v.ups %}
   <section class="card c6">
     <div class="card-h"><div><div class="card-t">{{ icon('topo') }} Storage pools</div><div class="card-sub">RAID type and state; rebuilds and scrubbing show here</div></div></div>
     <div class="card-b flush"><table class="t"><tbody>
@@ -432,24 +437,27 @@ NAS_BODY = r"""
     {% if v.ups %}<div class="card-foot"><span>UPS {{ v.ups.model }}: {{ v.ups.status }}{% if v.ups.charge is not none %} · {{ v.ups.charge }}% charge{% endif %}</span></div>{% endif %}
     </div>
   </section>
+  {% endif %}
 </div>
 
 <section class="card">
-  <div class="card-h"><div><div class="card-t">{{ icon('disk') }} Disks</div><div class="card-sub">Status, SMART, temperature{% if v.disks | selectattr('life') | list %} and SSD life{% endif %}</div></div></div>
+  <div class="card-h"><div><div class="card-t">{{ icon('disk') }} Disks</div><div class="card-sub">{% if v.source == 'Info Center' %}Health and temperature from Info Center (RAID type, SMART details and bad sectors need an administrator account){% else %}Status, SMART, temperature{% if v.disks | selectattr('life') | list %} and SSD life{% endif %}{% endif %}</div></div></div>
   <div class="table-wrap">
     <table class="t sortable">
-      <thead><tr><th>Disk</th><th>Model</th><th class="r">Size</th><th>Status</th><th>SMART</th><th class="r">Temp</th><th class="r">Bad sectors</th><th class="r">SSD life</th></tr></thead>
+      {% set full = v.source != 'Info Center' %}
+      <thead><tr><th>Disk</th><th>Model</th><th class="r">Size</th><th>Status</th>{% if full %}<th>SMART</th>{% else %}<th>Health</th>{% endif %}<th class="r">Temp</th>{% if full %}<th class="r">Bad sectors</th><th class="r">SSD life</th>{% endif %}</tr></thead>
       <tbody>
       {% for d in v.disks %}
       <tr>
-        <td><span class="dev-name">{{ d.name }}</span><div class="dev-sub">{{ d.type }}{% if d.pool %} · {{ d.pool }}{% endif %}</div></td>
+        <td><span class="dev-name">{{ d.name }}</span><div class="dev-sub">{{ d.type }}{% if d.pool %} · {{ d.pool.replace('reuse_', 'pool ') }}{% endif %}</div></td>
         <td class="mono" style="font-size:.76rem">{{ d.model }}<div class="dev-sub">{{ d.firmware }}</div></td>
         <td class="r" data-v="{{ d.size_gb or 0 }}">{{ ((d.size_gb / 1000) | round(1) ~ ' TB') if d.size_gb and d.size_gb >= 1000 else ((d.size_gb ~ ' GB') if d.size_gb else '—') }}</td>
         <td><span class="status"><i class="dot {{ 'good' if d.status in v.normal else 'danger' }}"></i>{{ d.status or '—' }}</span></td>
-        <td>{% if d.smart %}<span class="{{ '' if d.smart in v.normal or d.smart in ('healthy','safe') else 'danger' }}">{{ d.smart }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        {% if full %}<td>{% if d.smart %}<span class="{{ '' if d.smart in v.normal or d.smart in ('healthy','safe') else 'danger' }}">{{ d.smart }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        {% else %}<td>{% if d.overview in v.normal or d.overview == 'healthy' %}<span class="status"><i class="dot good"></i>{{ d.overview or 'normal' }}</span>{% else %}<span class="danger">{{ d.overview }}</span>{% endif %}{% if d.testing %} <span class="pill pill-info">{{ d.testing }} test</span>{% endif %}</td>{% endif %}
         <td class="r {{ 'warn' if (d.temp or 0) >= v.temp_limit }}">{{ (d.temp ~ ' °C') if d.temp else '—' }}</td>
-        <td class="r {{ 'danger' if d.bad_sectors }}">{{ d.bad_sectors if d.bad_sectors is not none else '—' }}</td>
-        <td class="r {{ 'warn' if d.life is not none and d.life < 10 }}">{{ (d.life ~ '%') if d.life is not none else '—' }}</td>
+        {% if full %}<td class="r {{ 'danger' if d.bad_sectors }}">{{ d.bad_sectors if d.bad_sectors is not none else '—' }}</td>
+        <td class="r {{ 'warn' if d.life is not none and d.life < 10 }}">{{ (d.life ~ '%') if d.life is not none else '—' }}</td>{% endif %}
       </tr>
       {% else %}<tr><td colspan="8" class="muted">No disks read{% if v.missing.storage %} ({{ v.missing.storage }}){% endif %}.</td></tr>{% endfor %}
       </tbody>

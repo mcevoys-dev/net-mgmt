@@ -156,14 +156,21 @@ def _test_synology(cfg, f, current):
         code = (j.get("error") or {}).get("code")
         return False, "DSM sign-in failed: " + AUTH_ERRORS.get(code, f"error {code}")
     sid = (j.get("data") or {}).get("sid")
-    s = requests.post(cfg.synology.url.rstrip("/") + "/webapi/entry.cgi", timeout=TIMEOUT,
-                      verify=cfg.synology.verify_tls,
-                      data={"api": "SYNO.Storage.CGI.Storage", "version": 1, "method": "load_info", "_sid": sid}).json()
+    def call(**p):
+        return requests.post(cfg.synology.url.rstrip("/") + "/webapi/entry.cgi", timeout=TIMEOUT,
+                             verify=cfg.synology.verify_tls, data={**p, "_sid": sid}).json()
+    s = call(api="SYNO.Storage.CGI.Storage", version=1, method="load_info")
+    ic = None if s.get("success") else call(api="SYNO.Core.System", version=1, method="info", type="storage")
     requests.post(cfg.synology.url.rstrip("/") + "/webapi/entry.cgi", timeout=TIMEOUT, verify=cfg.synology.verify_tls,
                   data={"api": "SYNO.API.Auth", "version": 6, "method": "logout", "_sid": sid})
     if s.get("success"):
         return True, f"Signed in; {len((s.get('data') or {}).get('disks') or [])} disks visible"
-    return False, "Signed in, but this account cannot read Storage Manager (add it to the administrators group)"
+    if ic and ic.get("success"):
+        n = len((ic.get("data") or {}).get("hdd_info") or [])
+        return True, (f"Signed in; {n} disks visible through Info Center (RAID type and SMART details "
+                      "need an administrator account)")
+    return False, ("Signed in, but this account cannot read disks: give it the System monitoring "
+                   "delegated role, or add it to the administrators group")
 
 
 def _test_listmonk(cfg, f, current):
