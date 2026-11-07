@@ -147,7 +147,7 @@ def _test_synology(cfg, f, current):
                           verify=cfg.synology.verify_tls,
                           data={"api": "SYNO.API.Auth", "version": 6, "method": "login",
                                 "account": f["username"], "passwd": f["password"],
-                                "session": "netdash-test", "format": "sid"})
+                                "session": "webui", "format": "sid"})
         j = r.json()
     except Exception as e:
         return False, f"NAS did not answer ({str(e)[:100]})"
@@ -160,7 +160,7 @@ def _test_synology(cfg, f, current):
                       verify=cfg.synology.verify_tls,
                       data={"api": "SYNO.Storage.CGI.Storage", "version": 1, "method": "load_info", "_sid": sid}).json()
     requests.post(cfg.synology.url.rstrip("/") + "/webapi/entry.cgi", timeout=TIMEOUT, verify=cfg.synology.verify_tls,
-                  data={"api": "SYNO.API.Auth", "version": 6, "method": "logout", "session": "netdash-test", "_sid": sid})
+                  data={"api": "SYNO.API.Auth", "version": 6, "method": "logout", "_sid": sid})
     if s.get("success"):
         return True, f"Signed in; {len((s.get('data') or {}).get('disks') or [])} disks visible"
     return False, "Signed in, but this account cannot read Storage Manager (add it to the administrators group)"

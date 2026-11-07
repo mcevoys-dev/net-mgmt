@@ -27,7 +27,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SESSION_ERRORS = {105, 106, 107, 119}     # not logged in, timed out, kicked, invalid SID
 AUTH_ERRORS = {
-    400: "wrong user name or password", 401: "account disabled", 402: "permission denied",
+    400: "wrong user name or password", 401: "account disabled",
+    402: "permission denied (allow the DSM application for this account)",
     403: "2-step verification is on for this account (turn it off for the dashboard's account)",
     404: "2-step verification code failed", 407: "this address is blocked by DSM's auto-block",
 }
@@ -107,8 +108,10 @@ class SynologyMonitor:
     def login(self):
         user, password = self.cred_reader()
         try:
+            # session names the DSM application being signed in to: a non-admin
+            # account is refused (error 402) for any name it has no privilege for.
             data = self._post("SYNO.API.Auth", 6, "login", account=user, passwd=password,
-                              session="netdash", format="sid")
+                              session="webui", format="sid")
         except DSMError as e:
             raise PermissionError(f"DSM sign-in failed: {AUTH_ERRORS.get(e.code, f'error {e.code}')}") from None
         self._sid = data.get("sid")
