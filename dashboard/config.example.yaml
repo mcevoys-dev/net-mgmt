@@ -90,6 +90,47 @@ proxmox:
   backup_max_age_hours: 26
   storage_warn_pct: 85
 
+# ── Proxmox Backup Server (optional) ─────────────────────────────────────────
+pbs:
+  enabled: false
+  url: https://192.168.1.50:8007
+  token_file: pbs_token.txt       # netdash@pbs!dashboard:<secret> (read-only Audit token)
+  verify_tls: false
+  storage_warn_pct: 85
+  full_warn_days: 90              # flag a datastore expected to fill up within this many days
+
+# ── Synology NAS (optional) ──────────────────────────────────────────────────
+synology:
+  enabled: false
+  url: https://192.168.1.60:5001
+  credentials_file: synology_credentials.txt   # username= / password= (see docs/integrations.md)
+  verify_tls: false
+  volume_warn_pct: 85
+  disk_temp_warn: 55              # °C
+
+# ── Websites and ports (optional) ────────────────────────────────────────────
+services:
+  enabled: false
+  interval: 300                   # seconds between checks
+  cert_warn_days: 21
+  sites:
+    - name: Blog
+      url: https://blog.example.com
+    # - {name: Shop, url: "https://shop.example.com", contains: "Add to cart"}
+  ports:
+    # - {name: SMTP, host: 192.168.1.40, port: 587, tls: starttls, sni: mail.example.com}
+    # - {name: IMAP, host: 192.168.1.40, port: 993, tls: tls, sni: mail.example.com}
+    - {name: NAS web, host: 192.168.1.60, port: 5001}
+
+# ── Mail server (optional) ───────────────────────────────────────────────────
+mail:
+  enabled: false
+  stalwart_url: ""                # e.g. http://192.168.1.40:8080 (health checks, no credential)
+  listmonk_url: ""                # e.g. http://192.168.1.40:9000
+  listmonk_credentials_file: listmonk_credentials.txt
+  watch_lists: []                 # list names that should get a send regularly
+  max_gap_hours: 60
+
 # ── Optional extras ──────────────────────────────────────────────────────────
 ntopng:                           # flow monitoring; feeds the assistant and a sidebar link
   enabled: false

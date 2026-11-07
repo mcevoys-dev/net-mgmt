@@ -40,6 +40,10 @@ import mist_client_events
 from event_log import EventLog
 from opnsense_extras import OPNsenseExtras
 from proxmox_mon import ProxmoxMonitor
+from pbs_mon import PBSMonitor
+from synology_mon import SynologyMonitor
+from site_checks import ServiceChecker
+from mail_mon import MailMonitor
 from ui import *  # noqa: F401,F403  page templates (BASE_HTML, OVERVIEW_HTML, ...)
 import ui as _ui
 
@@ -84,6 +88,9 @@ NTOPNG_TOKEN_FILE  = settings.secret_path(CFG, CFG.ntopng.token_file)
 OPNSENSE_KEY       = settings.secret_path(CFG, CFG.opnsense.key_file)
 HA_TOKEN_FILE      = settings.secret_path(CFG, CFG.home_assistant.token_file)
 PROXMOX_TOKEN_FILE = settings.secret_path(CFG, CFG.proxmox.token_file)
+PBS_TOKEN_FILE     = settings.secret_path(CFG, CFG.pbs.token_file)
+SYNOLOGY_CRED_FILE = settings.secret_path(CFG, CFG.synology.credentials_file)
+LISTMONK_CRED_FILE = settings.secret_path(CFG, CFG.mail.listmonk_credentials_file)
 EVENT_LOG_FILE     = settings.data_path(CFG, "event_log.jsonl")
 _event_log = EventLog(EVENT_LOG_FILE, quiet_switches=CFG.inventory.quiet_switches,
                       primary_gateways=[w.gateway for w in CFG.opnsense.wans
@@ -442,6 +449,51 @@ PVE = ProxmoxMonitor(
     storage_warn_pct=CFG.proxmox.storage_warn_pct,
     on_event=lambda kind, sev, msg: _event_log.add(kind, sev, msg),
 ) if CFG.proxmox.enabled else None
+
+def _kv_pair(path, *keys):
+    """Read `key=value` lines and return the named values in order."""
+    vals = {}
+    for ln in path.read_text().splitlines():
+        if "=" in ln:
+            k, v = ln.split("=", 1)
+            vals[k.strip()] = v.strip()
+    missing = [k for k in keys if not vals.get(k)]
+    if missing:
+        raise ValueError(f"{path.name} is missing {', '.join(missing)}")
+    return tuple(vals[k] for k in keys)
+
+
+def _ev(kind, sev, msg):
+    _event_log.add(kind, sev, msg)
+
+
+# Proxmox Backup Server: datastores, verification, GC/prune/verify jobs.
+PBS = PBSMonitor(
+    CFG.pbs.url, lambda: PBS_TOKEN_FILE.read_text().strip(),
+    verify_tls=CFG.pbs.verify_tls, storage_warn_pct=CFG.pbs.storage_warn_pct,
+    gc_max_age_days=CFG.pbs.gc_max_age_days, full_warn_days=CFG.pbs.full_warn_days, on_event=_ev,
+) if CFG.pbs.enabled else None
+
+# Synology NAS: disks, SMART, pools, volumes, DSM updates, UPS.
+NAS = SynologyMonitor(
+    CFG.synology.url, lambda: _kv_pair(SYNOLOGY_CRED_FILE, "username", "password"),
+    verify_tls=CFG.synology.verify_tls, volume_warn_pct=CFG.synology.volume_warn_pct,
+    disk_temp_warn=CFG.synology.disk_temp_warn, on_event=_ev,
+) if CFG.synology.enabled else None
+
+# Websites and ports (HTTP status, response time, certificate expiry).
+SERVICES = ServiceChecker(
+    CFG.services.sites, CFG.services.ports, interval=CFG.services.interval,
+    timeout=CFG.services.timeout, cert_warn_days=CFG.services.cert_warn_days,
+    slow_ms=CFG.services.slow_ms, on_event=_ev,
+) if CFG.services.enabled else None
+
+# Mail server: Stalwart health, Listmonk sends and bounces.
+MAIL = MailMonitor(
+    CFG.mail.stalwart_url, CFG.mail.listmonk_url,
+    lambda: _kv_pair(LISTMONK_CRED_FILE, "api_user", "token"),
+    watch_lists=CFG.mail.watch_lists, max_gap_hours=CFG.mail.max_gap_hours, on_event=_ev,
+) if CFG.mail.enabled else None
 
 # Track previous counters for delta calculation
 _prev_counters: dict = {}
@@ -1953,6 +2005,47 @@ def check_integrations() -> int:
                                 f"{sum(1 for n in nodes if n.get('online'))}/{len(nodes)} nodes online"))
         except Exception as e:
             results.append(line("Proxmox", False, str(e)[:160]))
+    if CFG.pbs.enabled and needs("Backup Server", PBS_TOKEN_FILE):
+        try:
+            ver = PBS.get("/version") or {}
+            usage = PBS.get("/status/datastore-usage") or []
+            stores = [u.get("store") for u in usage]
+            for path in ["/nodes/localhost/status", "/admin/verify", "/admin/prune",
+                         *(f"/admin/datastore/{s}/snapshots" for s in stores)]:
+                try:
+                    PBS.get(path)
+                except Exception as e:
+                    results.append(line("Backup Server", False, f"{path}: {str(e)[:100]}"))
+            results.append(line("Backup Server", True, f"PBS {ver.get('version')}; datastores: {', '.join(stores) or 'none visible'}"))
+        except Exception as e:
+            results.append(line("Backup Server", False, str(e)[:160]))
+    if CFG.synology.enabled and needs("Synology", SYNOLOGY_CRED_FILE):
+        try:
+            NAS.login()
+            v = NAS._collect()
+            gaps = "; not permitted: " + ", ".join(v["missing"]) if v["missing"] else ""
+            results.append(line("Synology", not v["missing"].get("storage"),
+                                f"{v['model'] or 'DSM'} {v['dsm'] or ''}; {len(v['disks'])} disks, "
+                                f"{len(v['volumes'])} volumes{gaps}"))
+        except Exception as e:
+            results.append(line("Synology", False, str(e)[:160]))
+    if CFG.services.enabled:
+        n = len(CFG.services.sites) + len(CFG.services.ports)
+        results.append(line("Services", n > 0, f"{len(CFG.services.sites)} sites, {len(CFG.services.ports)} ports"
+                            if n else "services.sites and services.ports are both empty"))
+    if CFG.mail.enabled:
+        if CFG.mail.stalwart_url:
+            s = MAIL._stalwart()
+            results.append(line("Stalwart", s["ok"], s["error"] or f"live={s['live']} ready={s['ready']}"))
+        if CFG.mail.listmonk_url and needs("Listmonk", LISTMONK_CRED_FILE):
+            lm = MAIL._listmonk()
+            unknown = [w["name"] for w in lm["watched"] if not w["known"]]
+            ok = not lm["error"] and not unknown
+            msg = lm["error"] or (f"{len(lm['lists'])} lists, {len(lm['campaigns'])} recent campaigns"
+                                  + (f"; bounces {lm['bounces_7d']} in 7 days" if lm["bounces_7d"] is not None
+                                     else "; bounces not readable (optional)")
+                                  + (f"; watch_lists not found: {', '.join(unknown)}" if unknown else ""))
+            results.append(line("Listmonk", ok, msg))
     if CFG.arp_scan.enabled:
         exe = shutil.which("arp-scan")
         results.append(line("arp-scan", bool(exe), exe or "not installed (apt install arp-scan)"))
@@ -1997,8 +2090,9 @@ if __name__ == "__main__":
     # Firewall health/services/log/bandwidth on their own cycle
     if OPN_EXTRAS:
         OPN_EXTRAS.start()
-    if PVE:
-        PVE.start()
+    for mon in (PVE, PBS, NAS, SERVICES, MAIL):
+        if mon:
+            mon.start()
 
     # ARP scan runs on a separate, slower cycle
     if CFG.arp_scan.enabled:

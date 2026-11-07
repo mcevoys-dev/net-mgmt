@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from math import ceil
 from urllib.parse import urlencode
 
+import ui_infra
+
 LOCAL_TZ = timezone.utc   # replaced from site.timezone by install()
 
 
@@ -690,10 +692,12 @@ def install(app, g):
 
     def proxmox_page():
         return render_template_string(PROXMOX_HTML, title="Proxmox", active="proxmox",
-                                      last_updated=g["last_updated_str"](), v=proxmox_view(g))
+                                      last_updated=g["last_updated_str"](), v=proxmox_view(g),
+                                      pb=ui_infra.pbs_view(g))
 
-    if cfg.proxmox.enabled:
+    if cfg.proxmox.enabled or cfg.pbs.enabled:
         app.add_url_rule("/proxmox", "proxmox_page", proxmox_page)
+    ui_infra.install(app, g, _page)
     app.jinja_env.filters["local_time"] = local_time
 
     @app.context_processor
@@ -735,7 +739,8 @@ def install(app, g):
             "ui_links": links,
             "ui_has": {"mist": cfg.mist.enabled, "central": cfg.central.enabled,
                        "assistant": cfg.assistant.enabled, "opnsense": cfg.opnsense.enabled,
-                       "proxmox": cfg.proxmox.enabled},
+                       "proxmox": cfg.proxmox.enabled or cfg.pbs.enabled, "nas": cfg.synology.enabled,
+                       "services": cfg.services.enabled or cfg.mail.enabled},
         }
 
 
@@ -770,6 +775,8 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
     ('events', '/events', 'Events', 'clock', none),
     ('firewall', '/firewall', 'Firewall', 'fw', none),
     ('proxmox', '/proxmox', 'Proxmox', 'server', none),
+    ('nas', '/nas', 'NAS', 'disk', none),
+    ('services', '/services', 'Services', 'globe', none),
   ]),
   ('Wireless', [
     ('wireless', '/wireless', 'Wireless Clients', 'wifi', 'wireless'),
@@ -1163,6 +1170,8 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
     <symbol id="i-ap" viewBox="0 0 24 24"><circle cx="12" cy="13" r="2"/><path d="M8.5 9.5a5 5 0 0 0 0 7"/><path d="M15.5 9.5a5 5 0 0 1 0 7"/><path d="M5.6 6.6a9 9 0 0 0 0 12.8"/><path d="M18.4 6.6a9 9 0 0 1 0 12.8"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
     <symbol id="i-switch" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h.01M14 12h.01M18 12h.01"/></symbol>
+    <symbol id="i-disk" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10" r="3.5"/><path d="M12 10h.01M8 17.5h8"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></symbol>
     <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></symbol>
     <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v5"/></symbol>
     <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="17" y="8" width="5" height="12" rx="1"/></symbol>
@@ -1213,7 +1222,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
   {% for sec, items in NAV if (sec != 'Wireless' or ui_has.mist) %}
   <div class="sb-sec">
     <div class="sb-sec-t">{{ sec }}</div>
-    {% for key, href, label, ic, cnt in items if (ui_has.central or key not in ('switches', 'wired')) and (ui_has.opnsense or key != 'firewall') and (ui_has.proxmox or key != 'proxmox') %}
+    {% for key, href, label, ic, cnt in items if (ui_has.central or key not in ('switches', 'wired')) and (ui_has.opnsense or key != 'firewall') and (ui_has.proxmox or key != 'proxmox') and (ui_has.nas or key != 'nas') and (ui_has.services or key != 'services') %}
     <a class="sb-link {{ 'active' if active == key }}" href="{{ href }}" title="{{ label }}">
       {{ icon(ic) }}<span class="sb-label">{{ label }}</span>
       {% if cnt and ui_counts.get(cnt) is not none %}<span class="sb-count {{ 'hot' if cnt == 'clientissues' and ui_counts[cnt] }}">{{ '{:,}'.format(ui_counts[cnt]) }}</span>{% endif %}
@@ -1579,6 +1588,14 @@ OVERVIEW_HTML = _page(r"""
           {% if fws %}{{ hrow('/firewall', 'fw', 'Firewall services', fws[0], fws[1], fws[2]) }}{% endif %}
           {% set pvs = ui_pve_summary() %}
           {% if pvs %}{{ hrow('/proxmox', 'server', 'Proxmox nodes', pvs[0], pvs[1], pvs[2]) }}{% endif %}
+          {% set pbss = ui_pbs_summary() %}
+          {% if pbss %}{{ hrow('/proxmox#backup-server', 'disk', 'Backup datastores', pbss[0], pbss[1], pbss[2]) }}{% endif %}
+          {% set nass = ui_nas_summary() %}
+          {% if nass %}{{ hrow('/nas', 'disk', 'NAS disks & volumes', nass[0], nass[1], nass[2]) }}{% endif %}
+          {% set svcs = ui_svc_summary() %}
+          {% if svcs %}{{ hrow('/services', 'globe', 'Websites & ports', svcs[0], svcs[1], svcs[2]) }}{% endif %}
+          {% set mls = ui_mail_summary() %}
+          {% if mls %}{{ hrow('/services', 'mail', 'Mail & newsletters', mls[0], mls[1], mls[2]) }}{% endif %}
           {{ hrow('/aps', 'ap', 'Access points', ap_total - ap_up, 0, ap_up) }}
           {{ hrow('/switches', 'switch', 'Switches', switch_total - switch_up, 0, switch_up) }}
           {{ hrow('/wireless-health', 'wifi', 'Wireless clients', wifi_poor, wifi_fair, wifi_count - wifi_weak) }}
@@ -2833,7 +2850,10 @@ FIREWALL_HTML = _page(r"""
 # ── Proxmox ──────────────────────────────────────────────────────────────────
 
 PROXMOX_HTML = _page(r"""
-{% if not v %}
+{% if not v and pb %}
+{% call page_head('Proxmox', 'Backup server') %}{% endcall %}
+""" + ui_infra.PBS_SECTION + r"""
+{% elif not v %}
 <section class="card"><div class="empty">Proxmox is not enabled in config.yaml.</div></section>
 {% elif v.pending %}
 {% call page_head('Proxmox', 'Reading the cluster…') %}{% endcall %}
@@ -2975,6 +2995,7 @@ PROXMOX_HTML = _page(r"""
   </section>
 </div>
 
+""" + ui_infra.PBS_SECTION + r"""
 <section class="card" style="margin-bottom:1rem">
   <div class="card-h"><div><div class="card-t">{{ icon('topo') }} Replication jobs</div><div class="card-sub">Storage replication between nodes; late = no sync within twice the schedule</div></div></div>
   <div class="table-wrap">

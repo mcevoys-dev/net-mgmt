@@ -133,6 +133,73 @@ traffic is tracked on every interface OPNsense reports.
 | `backup_max_age_hours` | `26` | A guest whose newest backup is older than this is flagged |
 | `storage_warn_pct` | `85` | Storage fuller than this is flagged and logged once to Events |
 
+## pbs
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | |
+| `url` | blank | **Required** when enabled: `https://<backup server>:8007` |
+| `token_file` | `pbs_token.txt` | `user@realm!tokenid:secret` on one line ([integrations.md](integrations.md#proxmox-backup-server-optional)) |
+| `verify_tls` | `false` | Check the server's certificate |
+| `storage_warn_pct` | `85` | A datastore fuller than this is flagged and logged once to Events |
+| `gc_max_age_days` | `8` | Flag a datastore whose garbage collection has not run for this long (only when it has a prune job) |
+| `full_warn_days` | `90` | Flag a datastore Proxmox expects to fill up within this many days |
+
+## synology
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | |
+| `url` | blank | **Required** when enabled: `https://<nas>:5001` |
+| `credentials_file` | `synology_credentials.txt` | `username=` and `password=` lines ([integrations.md](integrations.md#synology-nas-optional)) |
+| `verify_tls` | `false` | Check the NAS's certificate |
+| `volume_warn_pct` | `85` | A volume fuller than this is flagged and logged once to Events |
+| `disk_temp_warn` | `55` | Disk temperature (°C) that is flagged |
+
+## services
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | |
+| `interval` | `300` | Seconds between check rounds |
+| `timeout` | `10` | Seconds to wait for each answer |
+| `cert_warn_days` | `21` | Flag certificates that expire within this many days |
+| `slow_ms` | `3000` | Flag answers slower than this |
+| `sites` | `[]` | Websites (below); a plain URL is accepted too |
+| `ports` | `[]` | TCP ports (below) |
+
+Each entry in `sites`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `url` | blank | **Required**: `http://` or `https://` address |
+| `name` | the host name | Display name |
+| `group` | blank | Shown as a tag, e.g. the site's owner |
+| `expect_status` | any below 400 | Exact HTTP status that counts as up (after redirects) |
+| `contains` | blank | Text the page must contain |
+| `verify_tls` | `true` | Set to `false` for a self-signed certificate (expiry is then not checked) |
+
+Each entry in `ports`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `host`, `port` | blank | **Required** |
+| `name` | `host:port` | Display name |
+| `tls` | `none` | `none` (TCP connect only), `tls` (implicit TLS, e.g. 465, 993) or `starttls` (SMTP, e.g. 25, 587) |
+| `sni` | `host` | Certificate name to check, when `host` is an IP address |
+| `group` | blank | Shown as a tag |
+
+## mail
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Needs `stalwart_url`, `listmonk_url` or both |
+| `stalwart_url` | blank | Stalwart's HTTP address, for its health checks |
+| `listmonk_url` | blank | Listmonk's address |
+| `listmonk_credentials_file` | `listmonk_credentials.txt` | `api_user=` and `token=` lines ([integrations.md](integrations.md#mail-server-stalwart-and-listmonk-optional)) |
+| `watch_lists` | `[]` | Listmonk list names that should get a send regularly |
+| `max_gap_hours` | `60` | Flag a watched list after this long without a finished send (red after twice that) |
+
 ## admin
 
 | Setting | Default | Meaning |

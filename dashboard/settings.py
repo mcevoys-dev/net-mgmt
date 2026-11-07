@@ -61,6 +61,40 @@ DEFAULTS = {
         "backup_max_age_hours": 26,
         "storage_warn_pct": 85,
     },
+    "pbs": {
+        "enabled": False,
+        "url": "",
+        "token_file": "pbs_token.txt",
+        "verify_tls": False,
+        "storage_warn_pct": 85,
+        "gc_max_age_days": 8,
+        "full_warn_days": 90,
+    },
+    "synology": {
+        "enabled": False,
+        "url": "",
+        "credentials_file": "synology_credentials.txt",
+        "verify_tls": False,
+        "volume_warn_pct": 85,
+        "disk_temp_warn": 55,
+    },
+    "services": {
+        "enabled": False,
+        "interval": 300,
+        "timeout": 10,
+        "cert_warn_days": 21,
+        "slow_ms": 3000,
+        "sites": [],
+        "ports": [],
+    },
+    "mail": {
+        "enabled": False,
+        "stalwart_url": "",
+        "listmonk_url": "",
+        "listmonk_credentials_file": "listmonk_credentials.txt",
+        "watch_lists": [],
+        "max_gap_hours": 60,
+    },
     "ntopng": {
         "enabled": False,
         "url": "http://localhost:3000",
@@ -91,6 +125,8 @@ DEFAULTS = {
 WAN_DEFAULTS = {"gateway": "", "interface": "", "name": "", "type": "primary",
                 "icon": "globe", "ha_slug": ""}
 LINK_DEFAULTS = {"name": "", "url": "", "icon": "ext"}
+SITE_DEFAULTS = {"name": "", "url": "", "group": "", "expect_status": None, "contains": "", "verify_tls": True}
+PORT_DEFAULTS = {"name": "", "host": "", "port": 0, "tls": "none", "sni": "", "group": ""}
 ICONS = {"fiber", "cell", "globe"}
 LINK_ICONS = {"fw", "cloud", "flow", "ext", "globe", "switch", "ap"}
 
@@ -200,6 +236,45 @@ def load(path=None):
                           "(one or more node addresses, e.g. https://192.168.1.20:8006)")
     if isinstance(cfg["proxmox"]["hosts"], str):
         cfg["proxmox"]["hosts"] = [cfg["proxmox"]["hosts"]]
+
+    for section, key, example in (("pbs", "url", "https://192.168.1.50:8007"),
+                                  ("synology", "url", "https://192.168.1.60:5001")):
+        if cfg[section]["enabled"] and not cfg[section][key]:
+            raise ConfigError(f"{section}.{key} is required when {section} is enabled (e.g. {example})")
+    if cfg["mail"]["enabled"] and not (cfg["mail"]["stalwart_url"] or cfg["mail"]["listmonk_url"]):
+        raise ConfigError("mail needs stalwart_url, listmonk_url or both when enabled")
+    if isinstance(cfg["mail"]["watch_lists"], str):
+        cfg["mail"]["watch_lists"] = [cfg["mail"]["watch_lists"]]
+
+    svc = cfg["services"]
+    sites, ports = [], []
+    for i, s in enumerate(svc["sites"] or []):
+        if isinstance(s, str):
+            s = {"url": s}
+        s = {**SITE_DEFAULTS, **(s or {})}
+        unknown = set(s) - set(SITE_DEFAULTS)
+        if unknown:
+            raise ConfigError(f"services.sites[{i}]: unknown setting(s) {', '.join(sorted(unknown))}")
+        if not str(s["url"]).startswith(("http://", "https://")):
+            raise ConfigError(f"services.sites[{i}] needs a url starting with http:// or https://")
+        s["name"] = s["name"] or s["url"].split("://", 1)[1].rstrip("/")
+        sites.append(s)
+    for i, p in enumerate(svc["ports"] or []):
+        p = {**PORT_DEFAULTS, **(p or {})}
+        unknown = set(p) - set(PORT_DEFAULTS)
+        if unknown:
+            raise ConfigError(f"services.ports[{i}]: unknown setting(s) {', '.join(sorted(unknown))}")
+        if not p["host"] or not p["port"]:
+            raise ConfigError(f"services.ports[{i}] needs a host and a port")
+        if str(p["tls"]).lower() not in ("none", "tls", "starttls"):
+            raise ConfigError(f"services.ports[{i}].tls must be none, tls or starttls")
+        p["name"] = p["name"] or f"{p['host']}:{p['port']}"
+        ports.append(p)
+    names = [x["name"] for x in sites + ports]
+    dup = {n for n in names if names.count(n) > 1}
+    if dup:
+        raise ConfigError(f"services: duplicate check name(s) {', '.join(sorted(dup))}")
+    svc["sites"], svc["ports"] = sites, ports
 
     for section in ("central",):
         if cfg[section]["enabled"] and not cfg[section]["api_base"]:

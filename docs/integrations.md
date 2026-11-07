@@ -117,6 +117,97 @@ answers, so the page keeps working while one node is down. The dashboard
 cannot see why a node dropped (that is in the node's own kernel log); send
 node logs to a syslog server for that.
 
+## Proxmox Backup Server (optional)
+
+What it provides, as a **Backup server** card on the Proxmox page: each
+datastore's space and the date Proxmox estimates it fills up, how many
+backups it holds and how many failed verification, whether a prune job
+limits how long backups are kept, garbage collection, verify / prune / sync
+jobs and failed tasks, plus Events when any of those change. This is the
+part a Proxmox VE token cannot see.
+
+Create a read-only token. In the Backup Server's shell (web UI → *Shell*):
+
+```bash
+proxmox-backup-manager user create netdash@pbs --comment "Network dashboard (read-only)"
+proxmox-backup-manager acl update / Audit --auth-id netdash@pbs
+proxmox-backup-manager user generate-token netdash@pbs dashboard
+proxmox-backup-manager acl update / Audit --auth-id 'netdash@pbs!dashboard'
+```
+
+The third command prints the token's `tokenid` and `value` (shown only
+once). A token gets only the rights given to both it and its user, which is
+why the role is set twice. Save them as one line in `secrets/pbs_token.txt`,
+or enter them under **Admin → Credentials**:
+
+```
+netdash@pbs!dashboard:<value>
+```
+
+The `Audit` role can read but cannot back up, restore, prune or delete
+anything. Set `pbs.url` to `https://<backup server>:8007`.
+
+## Synology NAS (optional)
+
+What it provides, on the **NAS** page: each disk's status, SMART result,
+temperature, bad sectors and SSD life; storage pools (RAID state, rebuilds
+and scrubbing) and volumes (state and space); CPU, memory, system
+temperature, waiting DSM updates and the UPS, plus Events for each change.
+
+DSM has no read-only API role: reading Storage Manager needs an account in
+the **administrators** group. Create one just for the dashboard (*Control
+Panel → User & Group → Create*): a long random password, member of
+`administrators`, no shared-folder or application access you do not need.
+2-step verification must be off for this account, since the dashboard
+signs in unattended (if DSM enforces 2-step verification for
+administrators, exempt this account). Save the sign-in in
+`secrets/synology_credentials.txt`, or enter it under **Admin → Credentials**:
+
+```
+username=netdash
+password=<password>
+```
+
+Set `synology.url` to `https://<nas>:5001`. Requests are POSTs, so the
+password never appears in a URL or a web server log. A regular user can
+sign in too, but then the Disks and Volumes sections show "not permitted".
+
+## Services: websites and ports (optional)
+
+No credential. Every `services.interval` seconds (5 minutes by default) the
+dashboard fetches each URL in `services.sites` and connects to each entry in
+`services.ports`, and reports response time, uptime over the last 24 hours
+and days until the TLS certificate expires. A check must fail twice in a
+row before it is reported down, so one slow answer does not raise an alarm.
+Checks run from the dashboard's machine, so a site that only fails from
+outside your network (DNS, a tunnel) will still show as up here.
+
+For mail servers, check the ports with their TLS mode: `tls` for implicit
+TLS (465, 993) and `starttls` for SMTP (25, 587). When you connect by IP
+address, set `sni` to the name on the certificate.
+
+## Mail server: Stalwart and Listmonk (optional)
+
+`mail.stalwart_url` (e.g. `http://<mail server>:8080`): reads Stalwart's
+`/healthz/live` and `/healthz/ready`, which need no credential.
+
+`mail.listmonk_url` (e.g. `http://<mail server>:9000`): recent campaigns,
+list sizes, bounces in the last 7 days, and for each list named in
+`mail.watch_lists`, how long since it last got a finished send. A watched
+list that goes longer than `mail.max_gap_hours` without one is flagged,
+which catches a newsletter job that stopped sending without an error.
+
+In Listmonk, create a read-only API user: *Admin → Users → User roles → New*
+with only `campaigns:get_all`, `lists:get_all` and `bounces:get`, then
+*Users → New*, type **API**, with that role. Save the user name and the
+token it shows in `secrets/listmonk_credentials.txt`, or enter them under
+**Admin → Credentials**:
+
+```
+api_user=netdash
+token=<token>
+```
+
 ## LAN discovery (arp-scan)
 
 No credential. The dashboard runs `arp-scan <subnet>` for each entry in

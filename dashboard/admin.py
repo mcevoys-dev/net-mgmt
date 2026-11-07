@@ -117,6 +117,64 @@ def _read_pve(path):
     return {}
 
 
+def _test_pbs(cfg, f, current):
+    try:
+        r = requests.get(cfg.pbs.url.rstrip("/") + "/api2/json/status/datastore-usage", timeout=TIMEOUT,
+                         verify=cfg.pbs.verify_tls,
+                         headers={"Authorization": f"PBSAPIToken={f['token_id']}:{f['secret']}"})
+    except Exception as e:
+        return False, f"Backup Server did not answer ({str(e)[:100]})"
+    if not r.ok:
+        return False, f"Backup Server answered HTTP {r.status_code} (token rejected or lacks the Audit role)"
+    n = len(r.json().get("data") or [])
+    return n > 0, (f"Backup Server accepted the token; {n} datastore(s) visible" if n else
+                   "Token accepted but no datastores are visible: give it the Audit role on /")
+
+
+def _read_pbs(path):
+    if path.exists():
+        raw = path.read_text().strip()
+        sep = ":" if ":" in raw else "="
+        if sep in raw:
+            tid, sec = raw.split(sep, 1)
+            return {"token_id": tid, "secret": sec}
+    return {}
+
+
+def _test_synology(cfg, f, current):
+    try:
+        r = requests.post(cfg.synology.url.rstrip("/") + "/webapi/entry.cgi", timeout=TIMEOUT,
+                          verify=cfg.synology.verify_tls,
+                          data={"api": "SYNO.API.Auth", "version": 6, "method": "login",
+                                "account": f["username"], "passwd": f["password"],
+                                "session": "netdash-test", "format": "sid"})
+        j = r.json()
+    except Exception as e:
+        return False, f"NAS did not answer ({str(e)[:100]})"
+    if not j.get("success"):
+        from synology_mon import AUTH_ERRORS
+        code = (j.get("error") or {}).get("code")
+        return False, "DSM sign-in failed: " + AUTH_ERRORS.get(code, f"error {code}")
+    sid = (j.get("data") or {}).get("sid")
+    s = requests.post(cfg.synology.url.rstrip("/") + "/webapi/entry.cgi", timeout=TIMEOUT,
+                      verify=cfg.synology.verify_tls,
+                      data={"api": "SYNO.Storage.CGI.Storage", "version": 1, "method": "load_info", "_sid": sid}).json()
+    requests.post(cfg.synology.url.rstrip("/") + "/webapi/entry.cgi", timeout=TIMEOUT, verify=cfg.synology.verify_tls,
+                  data={"api": "SYNO.API.Auth", "version": 6, "method": "logout", "session": "netdash-test", "_sid": sid})
+    if s.get("success"):
+        return True, f"Signed in; {len((s.get('data') or {}).get('disks') or [])} disks visible"
+    return False, "Signed in, but this account cannot read Storage Manager (add it to the administrators group)"
+
+
+def _test_listmonk(cfg, f, current):
+    try:
+        r = requests.get(cfg.mail.listmonk_url.rstrip("/") + "/api/lists", params={"per_page": 1},
+                         timeout=TIMEOUT, headers={"Authorization": f"token {f['api_user']}:{f['token']}"})
+    except Exception as e:
+        return False, f"Listmonk did not answer ({str(e)[:100]})"
+    return r.ok, "Listmonk accepted the API user" if r.ok else f"Listmonk answered HTTP {r.status_code}"
+
+
 def _test_anthropic(cfg, f, current):
     r = requests.get("https://api.anthropic.com/v1/models", timeout=TIMEOUT,
                      headers={"x-api-key": f["key"], "anthropic-version": "2023-06-01"})
@@ -147,6 +205,16 @@ def specs(cfg):
         {"id": "proxmox", "name": "Proxmox VE", "on": cfg.proxmox.enabled, "file": cfg.proxmox.token_file,
          "fields": [("token_id", "Token ID (user@realm!name)"), ("secret", "Token secret")],
          "test": _test_proxmox, "render": lambda f: f"{f['token_id']}={f['secret']}\n", "load": _read_pve},
+        {"id": "pbs", "name": "Proxmox Backup Server", "on": cfg.pbs.enabled, "file": cfg.pbs.token_file,
+         "fields": [("token_id", "Token ID (user@realm!name)"), ("secret", "Token secret")],
+         "test": _test_pbs, "render": lambda f: f"{f['token_id']}:{f['secret']}\n", "load": _read_pbs},
+        {"id": "synology", "name": "Synology NAS", "on": cfg.synology.enabled, "file": cfg.synology.credentials_file,
+         "fields": [("username", "DSM user name"), ("password", "Password")], "test": _test_synology,
+         "render": lambda f: f"username={f['username']}\npassword={f['password']}\n", "load": _read_kv},
+        {"id": "listmonk", "name": "Listmonk", "on": cfg.mail.enabled and bool(cfg.mail.listmonk_url),
+         "file": cfg.mail.listmonk_credentials_file,
+         "fields": [("api_user", "API user name"), ("token", "API token")], "test": _test_listmonk,
+         "render": lambda f: f"api_user={f['api_user']}\ntoken={f['token']}\n", "load": _read_kv},
         {"id": "assistant", "name": "Claude (Ask panel)", "on": cfg.assistant.enabled,
          "file": cfg.assistant.key_file, "fields": [("key", "API key")], "test": _test_anthropic,
          "render": lambda f: f["key"] + "\n", "load": lambda p: {}},

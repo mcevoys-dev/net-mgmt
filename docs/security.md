@@ -44,7 +44,13 @@ with TLS), or only from a network you trust.
   already excludes `config.yaml`, `secrets/` and `data/`.
 - Use least-privilege accounts: a Mist observer, a dedicated OPNsense API user
   limited to the four read endpoints in [integrations.md](integrations.md),
-  a Central token for monitoring.
+  a Central token for monitoring, Proxmox VE `PVEAuditor` and Backup Server
+  `Audit` tokens, and a Listmonk API user with only the three read
+  permissions.
+- The Synology account is the exception: DSM has no read-only role that can
+  see Storage Manager, so it is an administrator. Give it a long random
+  password used nowhere else, and treat its credential file like a root
+  password. Leave Synology off if you are not comfortable with that.
 - Replace any key that has been pasted into chat, email or a ticket.
 - The repository's pre-commit hook (`git config core.hooksPath .githooks`)
   blocks commits containing strings that look like secrets.
