@@ -318,7 +318,7 @@ def install(app, g):
         for s in specs(cfg):
             p = settings.secret_path(cfg, s["file"])
             rows.append({**s, "path": str(p), "status": file_status(p)})
-        return render(CREDS, rows=rows, msg=session.pop("msg", None))
+        return render(CREDS, rows=rows, msg=session.pop("msg", None), msg_for=session.pop("msg_for", None))
 
     @app.route("/settings/login", methods=["POST"])
     def admin_login():
@@ -350,6 +350,7 @@ def install(app, g):
         if not enabled() or not logged_in():
             abort(403)
         check_csrf()
+        session["msg_for"] = cid                   # show the result inside this card
         spec = next((s for s in specs(cfg) if s["id"] == cid), None)
         if not spec:
             abort(404)
@@ -413,9 +414,10 @@ CREDS_HTML = r"""
 {% call page_head('Credentials', 'Replace the API key or token for an integration. Keys are never shown, only replaced.') %}
   <form method="post" action="/settings/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit">Sign out</button></form>
 {% endcall %}
-{% if msg %}
+{% macro msg_banner() %}
 <div class="info-banner" style="margin:0 0 1rem;{{ 'background:var(--danger-soft);color:var(--danger)' if msg[0] == 'danger' else ('background:var(--warn-soft)' if msg[0] == 'warn' else 'background:var(--good-soft)') }}">{{ icon('info') }}<span>{{ msg[1] }}</span></div>
-{% endif %}
+{% endmacro %}
+{% if msg and not msg_for %}{{ msg_banner() }}{% endif %}
 <div class="grid">
   {% for r in rows %}
   <section class="card c6" id="{{ r.id }}">
@@ -427,6 +429,7 @@ CREDS_HTML = r"""
       </div>
     </div>
     <div class="card-b" style="padding-top:.3rem">
+      {% if msg and msg_for == r.id %}<div style="margin-top:.6rem">{{ msg_banner() }}</div>{% endif %}
       {% if r.status.set %}
       <div class="note">Last changed {{ r.status.changed | local_time('%d %b %Y %H:%M') }}
         {% if not r.status.private %} · <span class="warn" style="font-weight:600">readable by other users ({{ r.status.mode }}); saving here makes it private</span>{% endif %}</div>

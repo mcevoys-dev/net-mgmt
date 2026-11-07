@@ -531,7 +531,7 @@ SERVICES_BODY = r"""
   <section class="card {{ 'c7' if lm.watched else 'c12' }}">
     <div class="card-h"><div><div class="card-t">{{ icon('mail') }} Recent campaigns</div><div class="card-sub">Listmonk{% if lm.bounces_7d is not none %} · {{ lm.bounces_7d }} bounce{{ 's' if lm.bounces_7d != 1 }} in 7 days{% for t, n in lm.bounce_types | dictsort %} ({{ n }} {{ t }}){% endfor %}{% endif %}</div></div>
       <div class="card-x"><a class="card-link" href="{{ lm.url }}/admin/campaigns" target="_blank" rel="noopener">Open {{ ext() }}</a></div></div>
-    {% if lm.error %}<div class="card-b"><div class="danger">{{ lm.error }}</div></div>{% else %}
+    {% if lm.error %}<div class="card-b"><div class="{{ 'muted' if lm.no_creds else 'danger' }}">{{ lm.error }}</div></div>{% else %}
     <div class="table-wrap"><table class="t">
       <thead><tr><th>Campaign</th><th>Status</th><th class="r">Sent</th><th>When</th></tr></thead>
       <tbody>{% for c in lm.campaigns[:15] %}
