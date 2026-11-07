@@ -149,28 +149,43 @@ anything. Set `pbs.url` to `https://<backup server>:8007`.
 
 ## Synology NAS (optional)
 
-What it provides, on the **NAS** page: each disk's status, SMART result,
-temperature, bad sectors and SSD life; storage pools (RAID state, rebuilds
-and scrubbing) and volumes (state and space); CPU, memory, system
-temperature, waiting DSM updates and the UPS, plus Events for each change.
+What it provides, on the **NAS** page: each disk's health and temperature,
+volumes (state and space), CPU, memory and system temperature, plus Events
+when a disk or volume leaves the normal state, a volume fills up or a disk
+runs hot. An administrator account also shows storage pools (RAID type,
+rebuilds, scrubbing), the SMART result, bad sectors, SSD life, waiting DSM
+updates and the UPS.
 
-DSM has no read-only API role: reading Storage Manager needs an account in
-the **administrators** group. Create one just for the dashboard (*Control
-Panel → User & Group → Create*): a long random password, member of
-`administrators`, no shared-folder or application access you do not need.
-2-step verification must be off for this account, since the dashboard
-signs in unattended (if DSM enforces 2-step verification for
-administrators, exempt this account). Save the sign-in in
-`secrets/synology_credentials.txt`, or enter it under **Admin → Credentials**:
+Create an account just for the dashboard (*Control Panel → User & Group →
+Create*), with a long random password:
+
+1. Groups: leave it in `users` only.
+2. Shared folders: **No access** to all of them.
+3. Applications: **Allow** for **DSM** only, deny everything else. DSM
+   refuses the sign-in ("permission denied") without it.
+4. Leave 2-step verification off for this account: the dashboard signs in
+   unattended. If DSM enforces 2-step verification, exempt this account.
+5. Select the user, then *Delegate → Delegated Administration* and tick
+   only **System monitoring** (view Info Center and Resource Monitor). This
+   lets the account read disk and volume health without being an
+   administrator.
+
+Save the sign-in in `secrets/synology_credentials.txt`, or enter it under
+**Admin → Credentials**, whose test reports what the account can see:
 
 ```
 username=netdash
 password=<password>
 ```
 
+DSM has no read-only role for Storage Manager, so the dashboard reads
+Info Center's storage view instead and says so on the page. If you want the
+pool, SMART and update details as well, add the account to the
+`administrators` group; that is a full administrator, so weigh it against
+having that password on the dashboard's machine.
+
 Set `synology.url` to `https://<nas>:5001`. Requests are POSTs, so the
-password never appears in a URL or a web server log. A regular user can
-sign in too, but then the Disks and Volumes sections show "not permitted".
+password never appears in a URL or a web server log.
 
 ## Services: websites and ports (optional)
 

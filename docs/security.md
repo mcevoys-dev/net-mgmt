@@ -47,10 +47,10 @@ with TLS), or only from a network you trust.
   a Central token for monitoring, Proxmox VE `PVEAuditor` and Backup Server
   `Audit` tokens, and a Listmonk API user with only the three read
   permissions.
-- The Synology account is the exception: DSM has no read-only role that can
-  see Storage Manager, so it is an administrator. Give it a long random
-  password used nowhere else, and treat its credential file like a root
-  password. Leave Synology off if you are not comfortable with that.
+- For Synology, use a regular user with only the DSM application and the
+  **System monitoring** delegated role (see [integrations.md](integrations.md#synology-nas-optional)).
+  Making it an administrator adds detail but gives the dashboard's machine a
+  full DSM administrator password; only do that knowingly.
 - Replace any key that has been pasted into chat, email or a ticket.
 - The repository's pre-commit hook (`git config core.hooksPath .githooks`)
   blocks commits containing strings that look like secrets.
