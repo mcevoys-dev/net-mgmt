@@ -97,6 +97,26 @@ def _test_ha(cfg, f, current):
     return r.ok, f"Home Assistant answered HTTP {r.status_code}"
 
 
+def _test_proxmox(cfg, f, current):
+    last = "no hosts configured"
+    for host in cfg.proxmox.hosts:
+        try:
+            r = requests.get(host.rstrip("/") + "/api2/json/cluster/status", timeout=TIMEOUT,
+                             verify=cfg.proxmox.verify_tls,
+                             headers={"Authorization": f"PVEAPIToken={f['token_id']}={f['secret']}"})
+            return r.ok, f"Proxmox ({host}) answered HTTP {r.status_code}" + ("" if r.ok else " (token rejected or lacks rights)")
+        except Exception as e:
+            last = str(e)[:100]
+    return False, f"no Proxmox host answered ({last})"
+
+
+def _read_pve(path):
+    if path.exists() and "=" in path.read_text():
+        tid, sec = path.read_text().strip().split("=", 1)
+        return {"token_id": tid, "secret": sec}
+    return {}
+
+
 def _test_anthropic(cfg, f, current):
     r = requests.get("https://api.anthropic.com/v1/models", timeout=TIMEOUT,
                      headers={"x-api-key": f["key"], "anthropic-version": "2023-06-01"})
@@ -124,6 +144,9 @@ def specs(cfg):
         {"id": "home_assistant", "name": "Home Assistant", "on": cfg.home_assistant.enabled,
          "file": cfg.home_assistant.token_file, "fields": [("token", "Long-lived access token")],
          "test": _test_ha, "render": lambda f: f["token"] + "\n", "load": lambda p: {}},
+        {"id": "proxmox", "name": "Proxmox VE", "on": cfg.proxmox.enabled, "file": cfg.proxmox.token_file,
+         "fields": [("token_id", "Token ID (user@realm!name)"), ("secret", "Token secret")],
+         "test": _test_proxmox, "render": lambda f: f"{f['token_id']}={f['secret']}\n", "load": _read_pve},
         {"id": "assistant", "name": "Claude (Ask panel)", "on": cfg.assistant.enabled,
          "file": cfg.assistant.key_file, "fields": [("key", "API key")], "test": _test_anthropic,
          "render": lambda f: f["key"] + "\n", "load": lambda p: {}},

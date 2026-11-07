@@ -30,7 +30,7 @@ def _set_timezone(name):
 __all__ = [
     "BASE_HTML", "OVERVIEW_HTML", "WIRELESS_HTML", "WIRED_HTML", "APS_HTML",
     "DEVICES_HTML", "GAP_HTML", "WHEALTH_HTML", "EVENTS_HTML",
-    "CLIENT_ISSUES_HTML", "TOPOLOGY_HTML", "SWITCHES_HTML", "FIREWALL_HTML",
+    "CLIENT_ISSUES_HTML", "TOPOLOGY_HTML", "SWITCHES_HTML", "FIREWALL_HTML", "PROXMOX_HTML",
 ]
 
 PER_PAGE = 100
@@ -540,6 +540,75 @@ def firewall_summary(g):
     return (len(v["stopped"]), fair, running)
 
 
+def proxmox_view(g):
+    mon = g.get("PVE")
+    if not mon:
+        return None
+    s = mon.snapshot()
+    if not s.get("updated"):
+        return {"pending": True, "error": s.get("error")}
+    cfgp = g["CFG"].proxmox
+    notes = []
+    c = s["cluster"]
+    if not c["quorate"]:
+        notes.append(("danger", "The cluster has lost quorum: HA cannot act and VMs may be fenced."))
+    for n in s["nodes"]:
+        if not n["online"]:
+            notes.append(("danger", f"Node {n['name']} is offline."))
+        elif n.get("uptime") is not None and n["uptime"] < 86400:
+            notes.append(("info", f"Node {n['name']} restarted {fmt_duration(n['uptime'])} ago."))
+    if s["ha"]["fencing"] and "armed" not in str(s["ha"]["fencing"]):
+        notes.append(("warn", f"HA fencing is {s['ha']['fencing']}."))
+    for sv in s["ha"]["services"]:
+        if sv["state"] not in ("started", "stopped"):
+            notes.append(("warn", f"HA service {sv['sid']} is {sv['state']} on {sv['node']}."))
+    bad_repl = [j for j in s["replication"] if j["fail_count"] or j["late"]]
+    for j in bad_repl:
+        why = f"failed {j['fail_count']} time(s)" if j["fail_count"] else "has not synced on schedule"
+        notes.append(("warn", f"Replication {j['name']} ({j['source']} → {j['target']}) {why}."))
+    for r in s["backup"]["runs"]:
+        if not r["ok"]:
+            notes.append(("danger", f"Last backup run on {r['node']} ended with: {r['status']}."))
+    stale = [gst for gst in s["guests"] if gst["backup_stale"] and s["backup"]["scanned"]]
+    if stale:
+        notes.append(("warn", f"{len(stale)} guest(s) have no backup in the last {cfgp.backup_max_age_hours} hours: "
+                      + ", ".join(f"{x['vmid']} {x['name']}" for x in stale[:8]) + "."))
+    if s["backup"]["not_backed_up"]:
+        notes.append(("warn", "Not in any backup job: " + ", ".join(
+            f"{x['vmid']} {x.get('name') or ''}" for x in s["backup"]["not_backed_up"]) + "."))
+    for st in s["storage"]:
+        if st["status"] != "available":
+            notes.append(("warn", f"Storage {st['name']} on {st['node']} reports status '{st['status']}'."))
+        elif (st["used"] or 0) >= cfgp.storage_warn_pct:
+            notes.append(("warn", f"Storage {st['name']}{'' if st['shared'] else ' on ' + st['node']} is {st['used']}% full "
+                                  f"({st['free_gb']} GB free)."))
+    if s["backup"]["orphans"]:
+        notes.append(("info", "Backups kept for guests that no longer exist: " + ", ".join(
+            f"{o['vmid']} (newest {o['age_days']} days old)" for o in s["backup"]["orphans"]) + "."))
+    if s["backup"]["count"] and s["backup"]["unverified"] == s["backup"]["count"]:
+        notes.append(("info", f"None of the {s['backup']['count']} backups has been verified; a Proxmox Backup "
+                              "Server verify job would confirm they can be restored."))
+    if s["failed_tasks"]:
+        notes.append(("warn", f"{len(s['failed_tasks'])} Proxmox task(s) failed in the last 24 hours (listed at the bottom)."))
+    if s.get("error"):
+        notes.append(("danger", f"Last poll failed: {s['error']}"))
+    order = {"danger": 0, "warn": 1, "info": 2}
+    notes.sort(key=lambda x: order[x[0]])
+    storage_sorted = sorted(s["storage"], key=lambda x: (x["used"] is None, -(x["used"] or 0)))
+    return {**s, "pending": False, "notes": notes, "bad_repl": bad_repl, "stale": stale,
+            "storage_sorted": storage_sorted,
+            "warn_pct": cfgp.storage_warn_pct, "max_age_h": cfgp.backup_max_age_hours}
+
+
+def proxmox_summary(g):
+    v = proxmox_view(g)
+    if not v or v.get("pending"):
+        return None
+    offline = sum(1 for n in v["nodes"] if not n["online"])
+    fair = sum(1 for n in v["nodes"] if n["online"] and n.get("uptime") is not None and n["uptime"] < 86400)
+    return (offline, fair, len(v["nodes"]) - offline - fair)
+
+
 def fmt_duration(s):
     s = int(s or 0)
     if s >= 86400:
@@ -579,6 +648,7 @@ def install(app, g):
         ui_ap_health=lambda aps: ap_health(aps, port_power(g)),
         ui_band=lambda b: BAND_LABEL.get(str(b), b),
         ui_fw_summary=lambda: firewall_summary(g),
+        ui_pve_summary=lambda: proxmox_summary(g),
         ui_bits=fmt_bits,
         UTIL_WARN=UTIL_WARN, UTIL_BAD=UTIL_BAD, RETRY_WARN=RETRY_WARN, RETRY_BAD=RETRY_BAD,
     )
@@ -610,6 +680,13 @@ def install(app, g):
 
     if cfg.opnsense.enabled:
         app.add_url_rule("/firewall", "firewall_page", firewall_page)
+
+    def proxmox_page():
+        return render_template_string(PROXMOX_HTML, title="Proxmox", active="proxmox",
+                                      last_updated=g["last_updated_str"](), v=proxmox_view(g))
+
+    if cfg.proxmox.enabled:
+        app.add_url_rule("/proxmox", "proxmox_page", proxmox_page)
     app.jinja_env.filters["local_time"] = local_time
 
     @app.context_processor
@@ -650,7 +727,8 @@ def install(app, g):
             "ui_site": cfg.site.name,
             "ui_links": links,
             "ui_has": {"mist": cfg.mist.enabled, "central": cfg.central.enabled,
-                       "assistant": cfg.assistant.enabled, "opnsense": cfg.opnsense.enabled},
+                       "assistant": cfg.assistant.enabled, "opnsense": cfg.opnsense.enabled,
+                       "proxmox": cfg.proxmox.enabled},
         }
 
 
@@ -684,6 +762,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
     ('home', '/', 'Overview', 'home', none),
     ('events', '/events', 'Events', 'clock', none),
     ('firewall', '/firewall', 'Firewall', 'fw', none),
+    ('proxmox', '/proxmox', 'Proxmox', 'server', none),
   ]),
   ('Wireless', [
     ('wireless', '/wireless', 'Wireless Clients', 'wifi', 'wireless'),
@@ -1077,6 +1156,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
     <symbol id="i-ap" viewBox="0 0 24 24"><circle cx="12" cy="13" r="2"/><path d="M8.5 9.5a5 5 0 0 0 0 7"/><path d="M15.5 9.5a5 5 0 0 1 0 7"/><path d="M5.6 6.6a9 9 0 0 0 0 12.8"/><path d="M18.4 6.6a9 9 0 0 1 0 12.8"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
     <symbol id="i-switch" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h.01M14 12h.01M18 12h.01"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></symbol>
     <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v5"/></symbol>
     <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="17" y="8" width="5" height="12" rx="1"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
@@ -1126,7 +1206,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
   {% for sec, items in NAV if (sec != 'Wireless' or ui_has.mist) %}
   <div class="sb-sec">
     <div class="sb-sec-t">{{ sec }}</div>
-    {% for key, href, label, ic, cnt in items if (ui_has.central or key not in ('switches', 'wired')) and (ui_has.opnsense or key != 'firewall') %}
+    {% for key, href, label, ic, cnt in items if (ui_has.central or key not in ('switches', 'wired')) and (ui_has.opnsense or key != 'firewall') and (ui_has.proxmox or key != 'proxmox') %}
     <a class="sb-link {{ 'active' if active == key }}" href="{{ href }}" title="{{ label }}">
       {{ icon(ic) }}<span class="sb-label">{{ label }}</span>
       {% if cnt and ui_counts.get(cnt) is not none %}<span class="sb-count {{ 'hot' if cnt == 'clientissues' and ui_counts[cnt] }}">{{ '{:,}'.format(ui_counts[cnt]) }}</span>{% endif %}
@@ -1490,6 +1570,8 @@ OVERVIEW_HTML = _page(r"""
           {% if wan_cards %}{{ hrow('#internet', 'globe', 'Internet (WAN)', wan_bad, wan_warn, wan_cards|length - wan_bad - wan_warn) }}{% endif %}
           {% set fws = ui_fw_summary() %}
           {% if fws %}{{ hrow('/firewall', 'fw', 'Firewall services', fws[0], fws[1], fws[2]) }}{% endif %}
+          {% set pvs = ui_pve_summary() %}
+          {% if pvs %}{{ hrow('/proxmox', 'server', 'Proxmox nodes', pvs[0], pvs[1], pvs[2]) }}{% endif %}
           {{ hrow('/aps', 'ap', 'Access points', ap_total - ap_up, 0, ap_up) }}
           {{ hrow('/switches', 'switch', 'Switches', switch_total - switch_up, 0, switch_up) }}
           {{ hrow('/wireless-health', 'wifi', 'Wireless clients', wifi_poor, wifi_fair, wifi_count - wifi_weak) }}
@@ -2736,6 +2818,190 @@ FIREWALL_HTML = _page(r"""
   {% endif %}
   {% endif %}
 </section>
+{% endif %}
+<style>.notes li.note-danger::before{background:var(--danger-dot)}.notes li.note-info::before{background:var(--info)}</style>
+""")
+
+
+# ── Proxmox ──────────────────────────────────────────────────────────────────
+
+PROXMOX_HTML = _page(r"""
+{% if not v %}
+<section class="card"><div class="empty">Proxmox is not enabled in config.yaml.</div></section>
+{% elif v.pending %}
+{% call page_head('Proxmox', 'Reading the cluster…') %}{% endcall %}
+<div class="info-banner">{{ icon('info') }}<span>Reading the Proxmox cluster; this page fills in within a minute of the dashboard starting.{% if v.error %} Last error: {{ v.error }}{% endif %}</span></div>
+{% else %}
+{% set c = v.cluster %}
+{% set running = v.guests | selectattr('status', 'equalto', 'running') | list | length %}
+{% call page_head('Proxmox', 'Proxmox VE ' ~ (v.version or '') ~ ' · ' ~ (c.name or 'cluster') ~ ' · ' ~ (v.nodes | length) ~ ' nodes · ' ~ (v.guests | length) ~ ' guests') %}{% endcall %}
+
+<div class="stats">
+  <div class="stat"><div class="stat-l">{{ icon('server') }} Nodes</div>
+    <div class="stat-v {{ 'v-good' if c.online == (v.nodes | length) else 'v-danger' }}">{{ c.online }}<small>/{{ v.nodes | length }}</small></div>
+    <div class="stat-s">{{ 'quorate' if c.quorate else 'NO QUORUM' }}</div></div>
+  <div class="stat"><div class="stat-l">{{ icon('check') }} HA</div>
+    <div class="stat-v" style="font-size:1.2rem;margin-top:.55rem">{{ v.ha.services | length }} guest{{ 's' if v.ha.services | length != 1 }}</div>
+    <div class="stat-s">manager on {{ v.ha.master or '—' }} · fencing {{ v.ha.fencing or '—' }}</div></div>
+  <div class="stat"><div class="stat-l">{{ icon('topo') }} Replication</div>
+    <div class="stat-v {{ 'v-warn' if v.bad_repl else 'v-good' }}">{{ (v.replication | length) - (v.bad_repl | length) }}<small>/{{ v.replication | length }}</small></div>
+    <div class="stat-s">{{ 'jobs on schedule' if not v.bad_repl else (v.bad_repl | length) ~ ' failing or late' }}</div></div>
+  <div class="stat"><div class="stat-l">{{ icon('clock') }} Backups</div>
+    <div class="stat-v {{ 'v-warn' if v.stale else 'v-good' }}">{{ (v.guests | length) - (v.stale | length) }}<small>/{{ v.guests | length }}</small></div>
+    <div class="stat-s">guests backed up within {{ v.max_age_h }}h</div></div>
+  <div class="stat"><div class="stat-l">{{ icon('devices') }} Guests</div>
+    <div class="stat-v">{{ running }}<small>/{{ v.guests | length }}</small></div>
+    <div class="stat-s">running</div></div>
+</div>
+
+{% if v.notes %}
+<section class="card" style="margin-bottom:1rem">
+  <div class="card-h"><div><div class="card-t">{{ icon('info') }} Worth a look</div></div></div>
+  <div class="card-b" style="padding-top:.4rem"><ul class="notes">{% for sev, n in v.notes %}<li class="note-{{ sev }}">{{ n }}</li>{% endfor %}</ul></div>
+</section>
+{% endif %}
+
+<div class="grid">
+  <section class="card c7">
+    <div class="card-h"><div><div class="card-t">{{ icon('server') }} Nodes</div><div class="card-sub">Uptime resets show restarts, including HA fencing</div></div></div>
+    <div class="card-b flush"><div class="table-wrap">
+      <table class="t">
+        <thead><tr><th>Node</th><th>Status</th><th>Uptime</th><th class="r">CPU</th><th class="r">Memory</th><th class="r">Root disk</th><th>Version</th></tr></thead>
+        <tbody>
+          {% for n in v.nodes %}
+          <tr>
+            <td><div class="dev-name">{{ n.name }}</div><div class="dev-sub">{{ n.ip or '' }}{% if n.cores %} · {{ n.cores }} CPUs · {{ n.mem_total_gb }} GB{% endif %}</div></td>
+            <td style="white-space:nowrap"><span class="status"><i class="dot {{ 'good' if n.online else 'danger' }}"></i>{{ 'Online' if n.online else 'Offline' }}</span></td>
+            <td style="white-space:nowrap" data-v="{{ n.uptime or 0 }}">{{ (n.uptime | duration) if n.uptime else '—' }}{% if n.uptime and n.uptime < 86400 %} <span class="pill pill-warn">restarted</span>{% endif %}</td>
+            <td class="r">{{ (n.cpu ~ '%') if n.cpu is not none else '—' }}</td>
+            <td class="r {{ 'warn' if (n.mem or 0) >= 90 }}">{{ (n.mem ~ '%') if n.mem is not none else '—' }}</td>
+            <td class="r {{ 'warn' if (n.rootfs or 0) >= v.warn_pct }}">{{ (n.rootfs ~ '%') if n.rootfs is not none else '—' }}</td>
+            <td class="mono muted" style="font-size:.72rem">{{ n.pve or '' }}<div>{{ n.kernel or '' }}</div></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+  <section class="card c5">
+    <div class="card-h"><div><div class="card-t">{{ icon('check') }} High availability</div><div class="card-sub">Quorum {{ v.ha.quorum or '—' }} · manager on {{ v.ha.master or '—' }}</div></div></div>
+    <div class="card-b flush">
+      <table class="t"><tbody>
+        {% for s in v.ha.services %}
+        <tr><td style="width:1%"><i class="dot {{ 'good' if s.state == 'started' else ('muted' if s.state == 'stopped' else 'warn') }}"></i></td>
+            <td style="padding-left:0"><span class="dev-name">{{ s.sid }}</span> <span class="muted">{{ (v.guests | selectattr('sid', 'equalto', s.sid) | map(attribute='name') | first) or '' }}</span></td>
+            <td class="muted">{{ s.state }}</td><td class="r mono">{{ s.node }}</td></tr>
+        {% else %}<tr><td class="muted">No HA-managed guests.</td></tr>{% endfor %}
+      </tbody></table>
+      <div class="card-foot" style="flex-wrap:wrap">{% for l in v.ha.lrms %}<span class="mono" style="font-size:.72rem">{{ l.node }}: {{ (l.status.split('(')[1] or '').split(',')[0] if '(' in l.status else l.status }}</span>{% endfor %}</div>
+    </div>
+  </section>
+</div>
+
+<section class="card" data-table="pve-guests" style="margin-bottom:1rem">
+  <div class="card-h"><div><div class="card-t">{{ icon('devices') }} Guests</div><div class="card-sub">Virtual machines and containers, with replication and the newest backup</div></div></div>
+  <div class="tbl-tools">
+    <label class="tbl-filter">{{ icon('search') }}<input type="text" placeholder="Filter by name, ID, node…"/></label>
+    <div class="chips">
+      <button class="chip on" data-tag="">All</button>
+      {% for n in v.nodes %}<button class="chip" data-tag="node-{{ n.name }}">{{ n.name }}</button>{% endfor %}
+      <button class="chip" data-tag="ha">HA</button>
+      <button class="chip" data-tag="attention">Needs attention</button>
+    </div>
+    <span class="tbl-count" data-noun="guests"></span>
+  </div>
+  <div class="table-wrap">
+    <table class="t sortable" id="pve-guests">
+      <thead><tr><th class="r">ID</th><th>Name</th><th>Node</th><th>Status</th><th>Uptime</th><th class="r">CPU</th><th class="r">Memory</th><th>Replication</th><th>Newest backup</th></tr></thead>
+      <tbody>
+        {% for gst in v.guests %}
+        {% set r = gst.repl %}
+        {% set attn = gst.status != 'running' or gst.backup_stale or (r and (r.fail_count or r.late)) %}
+        <tr data-tags="node-{{ gst.node }}{{ ' ha' if gst.ha }}{{ ' attention' if attn }}">
+          <td class="r mono">{{ gst.vmid }}</td>
+          <td><span class="dev-name">{{ gst.name }}</span> <span class="pill pill-muted">{{ gst.kind }}</span>{% if gst.ha %} <span class="pill pill-info">HA</span>{% endif %}</td>
+          <td class="mono">{{ gst.node }}</td>
+          <td style="white-space:nowrap"><span class="status"><i class="dot {{ 'good' if gst.status == 'running' else 'danger' }}"></i>{{ gst.status }}</span></td>
+          <td class="muted" style="white-space:nowrap" data-v="{{ gst.uptime }}">{{ (gst.uptime | duration) if gst.uptime else '—' }}</td>
+          <td class="r">{{ gst.cpu }}%</td>
+          <td class="r">{{ (gst.mem ~ '%') if gst.mem is not none else '—' }}<div class="dev-sub">{{ gst.mem_gb }} GB</div></td>
+          <td style="white-space:nowrap" data-v="{{ r.age if r and r.age is not none else 999999 }}">{% if r %}<span class="{{ 'warn' if r.fail_count or r.late }}">→ {{ r.target }} · {{ (r.age | duration) ~ ' ago' if r.age is not none else 'never' }}</span>{% if r.fail_count %} <span class="pill pill-danger">{{ r.fail_count }} failed</span>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td style="white-space:nowrap" data-v="{{ gst.backup_age if gst.backup_age is not none else 9999999 }}">{% if gst.backup_age is not none %}<span class="{{ 'warn' if gst.backup_stale }}">{{ gst.backup_age | duration }} ago</span>{% elif v.backup.scanned %}<span class="danger">none found</span>{% else %}<span class="muted">checking…</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="grid">
+  <section class="card c6">
+    <div class="card-h"><div><div class="card-t">{{ icon('switch') }} Storage</div><div class="card-sub">Shared storage shown once</div></div></div>
+    <div class="card-b">
+      <div class="mlist" style="gap:.55rem">
+        {% for st in v.storage_sorted %}
+        <div class="mrow"><span class="mrow-l" style="font-weight:500">{{ st.name }} <span class="muted mono" style="font-size:.72rem">{{ 'shared' if st.shared else st.node }} · {{ st.type }}</span>{% if st.status != 'available' %} <span class="pill pill-warn">{{ st.status }}</span>{% endif %}</span>
+          <span class="mrow-v {{ 'danger' if (st.used or 0) >= 95 else ('warn' if (st.used or 0) >= v.warn_pct else '') }}">{{ (st.used ~ '%') if st.used is not none else '—' }}</span>
+          <div class="mbar {{ 'bad' if (st.used or 0) >= 95 else ('warn' if (st.used or 0) >= v.warn_pct else 'info') }}"><span style="width:{{ [st.used or 0, 1] | max }}%"></span></div>
+          {% if st.total_gb %}<span class="mrow-s">{{ st.free_gb }} GB free of {{ st.total_gb }} GB</span>{% endif %}</div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <section class="card c6">
+    <div class="card-h"><div><div class="card-t">{{ icon('clock') }} Backups</div>
+      <div class="card-sub">{{ v.backup.count }} backups on backup storage{% if v.backup.scanned %} · checked {{ v.backup.scanned | local_time('%H:%M') }}{% endif %}</div></div></div>
+    <div class="card-b flush">
+      <table class="t"><tbody>
+        {% for j in v.backup.jobs %}
+        <tr><td><span class="dev-name">Job {{ j.schedule }}</span> <span class="muted">→ {{ j.storage }} · {{ j.mode }}</span>{% if not j.enabled %} <span class="pill pill-warn">disabled</span>{% endif %}</td>
+            <td class="r muted" style="white-space:nowrap">next {{ j.next | local_time('%a %H:%M') if j.next else '—' }}</td></tr>
+        {% endfor %}
+        {% for r in v.backup.runs %}
+        <tr><td><span class="status"><i class="dot {{ 'good' if r.ok else 'danger' }}"></i>Last run on {{ r.node }}</span>{% if not r.ok %} <span class="danger">{{ r.status }}</span>{% endif %}</td>
+            <td class="r muted" style="white-space:nowrap">{{ r.start | local_time('%a %H:%M') }}{% if r.end and r.start %} · {{ (r.end - r.start) | duration }}{% endif %}</td></tr>
+        {% endfor %}
+      </tbody></table>
+    </div>
+  </section>
+</div>
+
+<section class="card" style="margin-bottom:1rem">
+  <div class="card-h"><div><div class="card-t">{{ icon('topo') }} Replication jobs</div><div class="card-sub">Storage replication between nodes; late = no sync within twice the schedule</div></div></div>
+  <div class="table-wrap">
+    <table class="t sortable">
+      <thead><tr><th>Guest</th><th>From → to</th><th>Schedule</th><th>Last sync</th><th class="r">Took</th><th>State</th></tr></thead>
+      <tbody>
+        {% for j in v.replication %}
+        <tr>
+          <td><span class="dev-name">{{ j.name }}</span> <span class="muted mono">{{ j.guest }}</span></td>
+          <td class="mono">{{ j.source }} → {{ j.target }}</td>
+          <td class="mono muted">{{ j.schedule }}</td>
+          <td style="white-space:nowrap" data-v="{{ j.age if j.age is not none else 999999 }}">{{ (j.age | duration) ~ ' ago' if j.age is not none else 'never' }}</td>
+          <td class="r muted">{{ (j.duration | round(1)) ~ ' s' if j.duration else '—' }}</td>
+          <td>{% if j.fail_count %}<span class="pill pill-danger">{{ j.fail_count }} failed</span> <span class="muted" style="font-size:.74rem">{{ j.error or '' }}</span>{% elif j.late %}<span class="pill pill-warn">late</span>{% else %}<span class="status"><i class="dot good"></i>OK</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% if v.failed_tasks %}
+<section class="card">
+  <div class="card-h"><div><div class="card-t">{{ icon('alert') }} Failed tasks</div><div class="card-sub">Last 24 hours{% if v.warned_tasks %} · plus {{ v.warned_tasks }} that finished with warnings{% endif %}</div></div></div>
+  <div class="table-wrap">
+    <table class="t"><thead><tr><th>When</th><th>Node</th><th>Task</th><th>Result</th></tr></thead><tbody>
+      {% for t in v.failed_tasks %}
+      <tr><td class="mono muted" style="white-space:nowrap">{{ t.start | local_time('%a %H:%M') }}</td><td class="mono">{{ t.node }}</td>
+          <td>{{ t.type }} {{ t.id or '' }}</td><td class="danger" style="font-size:.78rem">{{ t.status }}</td></tr>
+      {% endfor %}
+    </tbody></table>
+  </div>
+</section>
+{% endif %}
 {% endif %}
 <style>.notes li.note-danger::before{background:var(--danger-dot)}.notes li.note-info::before{background:var(--info)}</style>
 """)

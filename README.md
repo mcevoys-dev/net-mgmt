@@ -18,6 +18,7 @@ you don't use are hidden.
 |---|---|
 | Overview | Health of internet, APs, switches and clients; Wi-Fi service levels; busiest radios; worst links; WAN latency and traffic; client issues; recent events |
 | Events | Changes the dashboard noticed (WAN up/down, APs, switches, firewall services, firmware updates, new devices, Wi-Fi failures), filterable and paged |
+| Proxmox | Cluster quorum and nodes (restarts, including HA fencing), HA, every VM/container with replication and newest backup, storage, backup jobs and failed tasks |
 | Firewall | OPNsense health (CPU, memory, disk, connections), firmware status, services, blocked traffic from the firewall log, and the busiest devices right now |
 | Wireless Clients | Every Wi-Fi client with signal, retry rate, link rate, Wi-Fi generation and AP |
 | WiFi Health | Signal quality, load per AP, channel utilisation, worst links, client mix |

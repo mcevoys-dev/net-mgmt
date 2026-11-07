@@ -80,6 +80,16 @@ arp_scan:
   interval: 300                   # seconds
   interface: ""                   # blank = arp-scan's default interface
 
+# ── Proxmox VE (optional) ────────────────────────────────────────────────────
+proxmox:
+  enabled: false
+  hosts:                          # several nodes; the first that answers is used
+    - https://192.168.1.20:8006
+  token_file: proxmox_token.txt   # netdash@pve!dashboard=<secret> (read-only PVEAuditor token)
+  verify_tls: false
+  backup_max_age_hours: 26
+  storage_warn_pct: 85
+
 # ── Optional extras ──────────────────────────────────────────────────────────
 ntopng:                           # flow monitoring; feeds the assistant and a sidebar link
   enabled: false

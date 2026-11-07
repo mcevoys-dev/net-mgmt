@@ -87,6 +87,36 @@ and DHCP leases (used to tell static from dynamic addresses).
 4. Optional: list your WAN links under `opnsense.wans` to name and order them
    and draw traffic graphs (see [configuration.md](configuration.md)).
 
+## Proxmox VE (optional)
+
+What it provides: cluster quorum and node status (a node whose uptime resets
+has restarted, which is how HA fencing shows up), HA state, every VM and
+container with its replication and newest backup, storage use, backup jobs,
+and failed tasks, plus Events for each change.
+
+Create a read-only API token. On any Proxmox node, as root:
+
+```bash
+pveum user add netdash@pve --comment "Network dashboard (read-only)"
+pveum acl modify / --users netdash@pve --roles PVEAuditor
+pveum user token add netdash@pve dashboard --privsep 0
+```
+
+The last command prints the token's `full-tokenid` (`netdash@pve!dashboard`)
+and its `value` (the secret, shown only once). Save them as one line in
+`secrets/proxmox_token.txt`:
+
+```
+netdash@pve!dashboard=<value>
+```
+
+`PVEAuditor` can read everything the page shows but cannot start, stop,
+change or migrate anything. Set `proxmox.hosts` to the addresses of
+several nodes (`https://<node>:8006`); the dashboard uses the first that
+answers, so the page keeps working while one node is down. The dashboard
+cannot see why a node dropped (that is in the node's own kernel log); send
+node logs to a syslog server for that.
+
 ## LAN discovery (arp-scan)
 
 No credential. The dashboard runs `arp-scan <subnet>` for each entry in

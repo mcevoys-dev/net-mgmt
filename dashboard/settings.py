@@ -53,6 +53,14 @@ DEFAULTS = {
         "firewall_log_lines": 1000,
     },
     "arp_scan": {"enabled": True, "interval": 300, "interface": ""},
+    "proxmox": {
+        "enabled": False,
+        "hosts": [],
+        "token_file": "proxmox_token.txt",
+        "verify_tls": False,
+        "backup_max_age_hours": 26,
+        "storage_warn_pct": 85,
+    },
     "ntopng": {
         "enabled": False,
         "url": "http://localhost:3000",
@@ -186,6 +194,12 @@ def load(path=None):
     inv["self_mac"] = (inv["self_mac"] or "").lower()
     inv["switch_uplinks"] = {str(k).lower(): str(v) for k, v in (inv["switch_uplinks"] or {}).items()}
     inv["quiet_switches"] = [str(s).lower() for s in inv["quiet_switches"] or []]
+
+    if cfg["proxmox"]["enabled"] and not cfg["proxmox"]["hosts"]:
+        raise ConfigError("proxmox.hosts is required when Proxmox is enabled "
+                          "(one or more node addresses, e.g. https://192.168.1.20:8006)")
+    if isinstance(cfg["proxmox"]["hosts"], str):
+        cfg["proxmox"]["hosts"] = [cfg["proxmox"]["hosts"]]
 
     for section in ("central",):
         if cfg[section]["enabled"] and not cfg[section]["api_base"]:

@@ -122,6 +122,17 @@ traffic is tracked on every interface OPNsense reports.
 | `switch_uplinks` | `{}` | `downstream switch name: text in upstream switch name`, for the Topology page when Central does not report switch-to-switch links |
 | `quiet_switches` | `[]` | Switch names whose up/down changes are not logged |
 
+## proxmox
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | |
+| `hosts` | `[]` | **Required** when enabled: node addresses such as `https://192.168.1.20:8006`, tried in order |
+| `token_file` | `proxmox_token.txt` | `user@realm!tokenid=secret` on one line ([integrations.md](integrations.md#proxmox-ve-optional)) |
+| `verify_tls` | `false` | Check the nodes' certificates (Proxmox uses self-signed ones by default) |
+| `backup_max_age_hours` | `26` | A guest whose newest backup is older than this is flagged |
+| `storage_warn_pct` | `85` | Storage fuller than this is flagged and logged once to Events |
+
 ## admin
 
 | Setting | Default | Meaning |

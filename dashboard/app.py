@@ -39,6 +39,7 @@ import mist_sle
 import mist_client_events
 from event_log import EventLog
 from opnsense_extras import OPNsenseExtras
+from proxmox_mon import ProxmoxMonitor
 from ui import *  # noqa: F401,F403  page templates (BASE_HTML, OVERVIEW_HTML, ...)
 import ui as _ui
 
@@ -82,6 +83,7 @@ ANTHROPIC_KEY_FILE = settings.secret_path(CFG, CFG.assistant.key_file)
 NTOPNG_TOKEN_FILE  = settings.secret_path(CFG, CFG.ntopng.token_file)
 OPNSENSE_KEY       = settings.secret_path(CFG, CFG.opnsense.key_file)
 HA_TOKEN_FILE      = settings.secret_path(CFG, CFG.home_assistant.token_file)
+PROXMOX_TOKEN_FILE = settings.secret_path(CFG, CFG.proxmox.token_file)
 EVENT_LOG_FILE     = settings.data_path(CFG, "event_log.jsonl")
 _event_log = EventLog(EVENT_LOG_FILE, quiet_switches=CFG.inventory.quiet_switches,
                       primary_gateways=[w.gateway for w in CFG.opnsense.wans
@@ -429,6 +431,17 @@ OPN_EXTRAS = OPNsenseExtras(
     log_lines=CFG.opnsense.firewall_log_lines,
     on_event=lambda kind, sev, msg: _event_log.add(kind, sev, msg),
 ) if CFG.opnsense.enabled else None
+
+# Proxmox cluster: nodes, guests, HA, replication, backups, storage, tasks.
+PVE = ProxmoxMonitor(
+    CFG.proxmox.hosts,
+    lambda: PROXMOX_TOKEN_FILE.read_text().strip(),
+    verify_tls=CFG.proxmox.verify_tls,
+    poll_seconds=POLL_INTERVAL,
+    backup_max_age_hours=CFG.proxmox.backup_max_age_hours,
+    storage_warn_pct=CFG.proxmox.storage_warn_pct,
+    on_event=lambda kind, sev, msg: _event_log.add(kind, sev, msg),
+) if CFG.proxmox.enabled else None
 
 # Track previous counters for delta calculation
 _prev_counters: dict = {}
@@ -1930,6 +1943,16 @@ def check_integrations() -> int:
                 results.append(line("OPNsense WANs", False, f"not reported by OPNsense: {', '.join(missing)}"))
         except Exception as e:
             results.append(line("OPNsense", False, str(e)[:160]))
+    if CFG.proxmox.enabled and needs("Proxmox", PROXMOX_TOKEN_FILE):
+        try:
+            ver = PVE.get("/version") or {}
+            st = PVE.get("/cluster/status") or []
+            nodes = [x for x in st if x.get("type") == "node"]
+            PVE.get("/cluster/ha/status/current"); PVE.get("/cluster/tasks"); PVE.get("/cluster/backup")
+            results.append(line("Proxmox", True, f"VE {ver.get('version')} via {PVE.snapshot().get('host')}; "
+                                f"{sum(1 for n in nodes if n.get('online'))}/{len(nodes)} nodes online"))
+        except Exception as e:
+            results.append(line("Proxmox", False, str(e)[:160]))
     if CFG.arp_scan.enabled:
         exe = shutil.which("arp-scan")
         results.append(line("arp-scan", bool(exe), exe or "not installed (apt install arp-scan)"))
@@ -1974,6 +1997,8 @@ if __name__ == "__main__":
     # Firewall health/services/log/bandwidth on their own cycle
     if OPN_EXTRAS:
         OPN_EXTRAS.start()
+    if PVE:
+        PVE.start()
 
     # ARP scan runs on a separate, slower cycle
     if CFG.arp_scan.enabled:
