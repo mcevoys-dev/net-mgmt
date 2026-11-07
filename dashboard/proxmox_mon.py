@@ -14,9 +14,43 @@ working while any one node is down. Changes between polls (a node going
 offline or restarting, quorum lost, HA moving a guest, replication or task
 failures, storage filling up) are reported through `on_event`.
 """
+import re
 import threading
 import time
 from datetime import datetime, timezone
+
+_START = re.compile(r"Starting Backup of VM (\d+)")
+_ARCHIVE = re.compile(r"archive '(?:vm|ct)/(\d+)/(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)'")
+_FINISH = re.compile(r"Finished Backup of VM (\d+) \(([\d:]+)\)")
+_FAIL = re.compile(r"ERROR: Backup of VM (\d+) failed - (.*)")
+
+
+def parse_vzdump_log(lines, task_start):
+    """{vmid: {"ok", "time", "duration", "error"}} from a vzdump task log.
+
+    Time is the archive's UTC timestamp when the log names one, else the
+    task's start time. Read-only tokens can read task logs even where
+    Proxmox hides backup files, so this is the fallback for backup ages.
+    """
+    out = {}
+    for line in lines:
+        m = _START.search(line)
+        if m:
+            out.setdefault(int(m.group(1)), {"ok": None, "time": task_start, "duration": None, "error": None})
+            continue
+        m = _ARCHIVE.search(line)
+        if m:
+            ts = datetime.strptime(m.group(2), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+            out.setdefault(int(m.group(1)), {"ok": None, "time": ts, "duration": None, "error": None})["time"] = ts
+            continue
+        m = _FINISH.search(line)
+        if m:
+            out.setdefault(int(m.group(1)), {"time": task_start, "error": None}).update(ok=True, duration=m.group(2))
+            continue
+        m = _FAIL.search(line)
+        if m:
+            out.setdefault(int(m.group(1)), {"time": task_start, "duration": None}).update(ok=False, error=m.group(2)[:160])
+    return out
 
 import requests
 import urllib3
@@ -45,6 +79,7 @@ class ProxmoxMonitor:
         self._seen_tasks = set()
         self._backups = {"latest": {}, "orphans": [], "count": 0, "unverified": 0, "scanned": None}
         self._last_scan = 0.0
+        self._log_cache = {}      # upid -> parsed vzdump log (finished logs never change)
         self._started = False
 
     # ── HTTP ──────────────────────────────────────────────────────────────
@@ -192,14 +227,30 @@ class ProxmoxMonitor:
 
         jobs = self.get("/cluster/backup") or []
         not_backed = self.get("/cluster/backup-info/not-backed-up") or []
-        runs = []
+        runs, from_logs = [], {}
         for n in online_names:
             try:
-                for t in (self.get(f"/nodes/{n}/tasks", {"typefilter": "vzdump", "limit": 3}) or [])[:1]:
+                node_tasks = self.get(f"/nodes/{n}/tasks", {"typefilter": "vzdump", "limit": 3}) or []
+            except Exception:
+                continue
+            for i, t in enumerate(node_tasks):
+                if i == 0:
                     runs.append({"node": n, "start": t.get("starttime"), "end": t.get("endtime"),
                                  "status": t.get("status"), "ok": t.get("status") == "OK"})
-            except Exception:
-                pass
+                upid = t.get("upid")
+                if not upid or not t.get("endtime"):
+                    continue                      # still running: read it once it has finished
+                if upid not in self._log_cache:
+                    try:
+                        log = self.get(f"/nodes/{n}/tasks/{upid}/log", {"limit": 10000}) or []
+                        self._log_cache[upid] = parse_vzdump_log([x.get("t", "") for x in log], t.get("starttime"))
+                    except Exception:
+                        continue
+                for vmid, r in self._log_cache[upid].items():
+                    if vmid not in from_logs or (r["time"] or 0) > (from_logs[vmid]["time"] or 0):
+                        from_logs[vmid] = r
+        if len(self._log_cache) > 200:
+            self._log_cache = dict(list(self._log_cache.items())[-100:])
 
         tasks = self.get("/cluster/tasks") or []
         recent = [t for t in tasks if t.get("status") and t.get("status") != "OK"
@@ -212,8 +263,14 @@ class ProxmoxMonitor:
         bk = self._backups
         guest_ids = {g["vmid"] for g in guests}
         for g in guests:
-            ts = bk["latest"].get(g["vmid"])
+            seen = bk["latest"].get(g["vmid"])
+            logged = from_logs.get(g["vmid"])
+            log_ok = logged["time"] if logged and logged["ok"] else None
+            ts = max(t for t in (seen, log_ok, 0) if t is not None) or None
             g["backup_age"] = (now - ts) if ts else None
+            g["backup_source"] = "file" if ts and ts == seen else ("task log" if ts else None)
+            g["backup_failed"] = bool(logged and logged["ok"] is False and (logged["time"] or 0) >= (ts or 0))
+            g["backup_error"] = logged.get("error") if g["backup_failed"] else None
             g["backup_stale"] = ts is None or now - ts > self.backup_max_age
             r = next((j for j in repl if j["guest"] == g["vmid"]), None)
             g["repl"] = r
@@ -239,6 +296,7 @@ class ProxmoxMonitor:
                        "not_backed_up": [{"vmid": x.get("vmid"), "name": x.get("name"), "type": x.get("type")}
                                          for x in not_backed],
                        "runs": runs, "orphans": orphans, "count": bk["count"],
+                       "files_visible": bk["count"] > 0, "from_logs": len(from_logs),
                        "unverified": bk["unverified"], "scanned": bk["scanned"]},
             "failed_tasks": [{"node": t.get("node"), "type": t.get("type"), "id": t.get("id"),
                               "status": t.get("status"), "start": t.get("starttime"), "user": t.get("user"),

@@ -569,7 +569,14 @@ def proxmox_view(g):
     for r in s["backup"]["runs"]:
         if not r["ok"]:
             notes.append(("danger", f"Last backup run on {r['node']} ended with: {r['status']}."))
-    stale = [gst for gst in s["guests"] if gst["backup_stale"] and s["backup"]["scanned"]]
+    for gst in s["guests"]:
+        if gst.get("backup_failed"):
+            notes.append(("danger", f"Last backup of {gst['vmid']} {gst['name']} failed: {gst['backup_error'] or 'see the task log'}."))
+    checked = s["backup"]["scanned"] or s["backup"].get("from_logs")
+    stale = [gst for gst in s["guests"] if gst["backup_stale"] and checked]
+    if not s["backup"].get("files_visible") and s["backup"].get("from_logs"):
+        notes.append(("info", "Backup ages come from the backup task logs: Proxmox hides backup files from the "
+                              "dashboard's read-only token, but lets it read each night's backup log."))
     if stale:
         notes.append(("warn", f"{len(stale)} guest(s) have no backup in the last {cfgp.backup_max_age_hours} hours: "
                       + ", ".join(f"{x['vmid']} {x['name']}" for x in stale[:8]) + "."))
@@ -585,7 +592,7 @@ def proxmox_view(g):
     if s["backup"]["orphans"]:
         notes.append(("info", "Backups kept for guests that no longer exist: " + ", ".join(
             f"{o['vmid']} (newest {o['age_days']} days old)" for o in s["backup"]["orphans"]) + "."))
-    if s["backup"]["count"] and s["backup"]["unverified"] == s["backup"]["count"]:
+    if s["backup"]["count"] and s["backup"]["unverified"] == s["backup"]["count"] and s["backup"].get("files_visible"):
         notes.append(("info", f"None of the {s['backup']['count']} backups has been verified; a Proxmox Backup "
                               "Server verify job would confirm they can be restored."))
     if s["failed_tasks"]:
@@ -2917,7 +2924,7 @@ PROXMOX_HTML = _page(r"""
       <tbody>
         {% for gst in v.guests %}
         {% set r = gst.repl %}
-        {% set attn = gst.status != 'running' or gst.backup_stale or (r and (r.fail_count or r.late)) %}
+        {% set attn = gst.status != 'running' or gst.backup_stale or gst.backup_failed or (r and (r.fail_count or r.late)) %}
         <tr data-tags="node-{{ gst.node }}{{ ' ha' if gst.ha }}{{ ' attention' if attn }}">
           <td class="r mono">{{ gst.vmid }}</td>
           <td><span class="dev-name">{{ gst.name }}</span> <span class="pill pill-muted">{{ gst.kind }}</span>{% if gst.ha %} <span class="pill pill-info">HA</span>{% endif %}</td>
@@ -2927,7 +2934,7 @@ PROXMOX_HTML = _page(r"""
           <td class="r">{{ gst.cpu }}%</td>
           <td class="r">{{ (gst.mem ~ '%') if gst.mem is not none else '—' }}<div class="dev-sub">{{ gst.mem_gb }} GB</div></td>
           <td style="white-space:nowrap" data-v="{{ r.age if r and r.age is not none else 999999 }}">{% if r %}<span class="{{ 'warn' if r.fail_count or r.late }}">→ {{ r.target }} · {{ (r.age | duration) ~ ' ago' if r.age is not none else 'never' }}</span>{% if r.fail_count %} <span class="pill pill-danger">{{ r.fail_count }} failed</span>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
-          <td style="white-space:nowrap" data-v="{{ gst.backup_age if gst.backup_age is not none else 9999999 }}">{% if gst.backup_age is not none %}<span class="{{ 'warn' if gst.backup_stale }}">{{ gst.backup_age | duration }} ago</span>{% elif v.backup.scanned %}<span class="danger">none found</span>{% else %}<span class="muted">checking…</span>{% endif %}</td>
+          <td style="white-space:nowrap" data-v="{{ gst.backup_age if gst.backup_age is not none else 9999999 }}">{% if gst.backup_failed %}<span class="pill pill-danger" title="{{ gst.backup_error or '' }}">last attempt failed</span> {% endif %}{% if gst.backup_age is not none %}<span class="{{ 'warn' if gst.backup_stale }}">{{ gst.backup_age | duration }} ago</span>{% elif v.backup.scanned or v.backup.from_logs %}<span class="danger">none found</span>{% else %}<span class="muted">checking…</span>{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -2952,7 +2959,7 @@ PROXMOX_HTML = _page(r"""
 
   <section class="card c6">
     <div class="card-h"><div><div class="card-t">{{ icon('clock') }} Backups</div>
-      <div class="card-sub">{{ v.backup.count }} backups on backup storage{% if v.backup.scanned %} · checked {{ v.backup.scanned | local_time('%H:%M') }}{% endif %}</div></div></div>
+      <div class="card-sub">{% if v.backup.files_visible %}{{ v.backup.count }} backups on backup storage{% if v.backup.scanned %} · checked {{ v.backup.scanned | local_time('%H:%M') }}{% endif %}{% else %}Results from each node's backup task log{% endif %}</div></div></div>
     <div class="card-b flush">
       <table class="t"><tbody>
         {% for j in v.backup.jobs %}
