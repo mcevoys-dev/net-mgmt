@@ -29,7 +29,7 @@ with a message naming the setting, so a typo never fails silently.
 |---|---|---|
 | `poll_interval` | `60` | Seconds between refreshes from the APIs |
 | `secrets_dir` | `.` | Where credential files are looked up, relative to the config file unless absolute |
-| `data_dir` | `.` | Where `event_log.jsonl` and `device_seen_history.json` are kept |
+| `data_dir` | `.` | Where `event_log.jsonl`, `device_seen_history.json` and `attention.json` (items hidden from the Overview's Needs attention panel) are kept |
 
 ## mist
 

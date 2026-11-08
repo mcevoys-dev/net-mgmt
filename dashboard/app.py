@@ -1574,7 +1574,7 @@ def overview():
         spark_wifi=spark_wifi,
         spark_wired=spark_wired,
         spark_total=spark_total,
-        recent_events=_event_log.recent(5),
+        recent_events=[e for e in _event_log.recent(2000) if e.get("kind") != "client"][:6],
         sle_cards=d.get("sle_cards", []),
         client_failures=d.get("client_failures", [])[:5],
         client_fail_summary=mist_client_events.summarize(d.get("client_failures", [])),

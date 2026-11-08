@@ -14,6 +14,9 @@ firewall.
   with single sign-on).
 - If the **Ask** panel is on, anyone who can reach the dashboard can spend
   your Claude API credit. Put it behind authentication before exposing it.
+- Anyone who can reach the dashboard can also hide items in the Overview's
+  **Needs attention** panel for up to 30 days. The dashboard refuses hide
+  requests sent from other websites, but that is no substitute for a login.
 
 ## The Credentials page
 

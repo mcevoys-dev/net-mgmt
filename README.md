@@ -16,7 +16,7 @@ you don't use are hidden.
 
 | Page | What it shows |
 |---|---|
-| Overview | Health of internet, APs, switches and clients; Wi-Fi service levels; busiest radios; worst links; WAN latency and traffic; client issues; recent events |
+| Overview | **Needs attention**: every problem the other pages find, most urgent first, each linked to its page and hideable for 1, 7 or 30 days ("All clear" when nothing is wrong); health of internet, servers, backups, NAS, services, APs, switches and clients with the reason beside each; Wi-Fi service levels; busiest radios; worst links; WAN latency and traffic; client issues; recent infrastructure events |
 | Events | Changes the dashboard noticed (WAN up/down, APs, switches, firewall services, firmware updates, new devices, Wi-Fi failures), filterable and paged |
 | Proxmox | Cluster quorum and nodes (restarts, including HA fencing), HA, every VM/container with replication and newest backup, storage, backup jobs and failed tasks |
 | Proxmox: Backup server | Datastore space and the date it fills up, backups that failed verification, retention (prune jobs), garbage collection, verify/prune/sync jobs, failed tasks |

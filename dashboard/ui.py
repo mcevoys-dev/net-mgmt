@@ -700,6 +700,39 @@ def install(app, g):
     ui_infra.install(app, g, _page)
     app.jinja_env.filters["local_time"] = local_time
 
+    # "Needs attention" on the Overview, and hiding an item for a while.
+    import attention
+    from settings import data_path
+    from flask import request, redirect, abort
+    att_state = attention.State(data_path(cfg, "attention.json"))
+    app.jinja_env.globals["ui_attention"] = lambda: attention.view(g, att_state)
+
+    def _same_origin():
+        # No login on the dashboard; at least refuse posts made from other sites.
+        src = request.headers.get("Origin") or request.headers.get("Referer") or ""
+        host = src.split("://", 1)[-1].split("/", 1)[0]
+        if not src or host != request.host:
+            abort(403)
+
+    def attention_snooze():
+        _same_origin()
+        key = (request.form.get("key") or "")[:40]
+        try:
+            days = int(request.form.get("days") or 0)
+        except ValueError:
+            days = 0
+        if key and days in attention.SNOOZE_DAYS:
+            att_state.snooze(key, days, request.form.get("text") or "")
+        return redirect("/#attention")
+
+    def attention_unsnooze():
+        _same_origin()
+        att_state.unsnooze((request.form.get("key") or "")[:40])
+        return redirect("/#attention")
+
+    app.add_url_rule("/attention/snooze", "attention_snooze", attention_snooze, methods=["POST"])
+    app.add_url_rule("/attention/unsnooze", "attention_unsnooze", attention_unsnooze, methods=["POST"])
+
     @app.context_processor
     def _ui_context():
         counts = {}
@@ -986,6 +1019,39 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
     .stat-v small{font-size:1rem;color:var(--muted);font-weight:600}
     .stat-s{font-size:.76rem;color:var(--muted);margin-top:.1rem}
     .stat-spark{margin-top:.45rem;height:26px}
+    .stats-slim{gap:.6rem}
+    .stats-slim .stat{padding:.55rem .8rem}
+    .stats-slim .stat-v{font-size:1.3rem;margin-top:.1rem}
+    .stats-slim .stat-v small{font-size:.8rem}
+    .stats-slim .stat-s{font-size:.72rem}
+    .stats-slim .stat-spark{margin-top:.25rem;height:18px}
+    .att{margin-bottom:1rem;border-left:4px solid var(--good)}
+    .att.att-warn{border-left-color:var(--warn-dot)}
+    .att.att-crit{border-left-color:var(--danger-dot)}
+    .att-list{list-style:none;margin:0;padding:0}
+    .att-row{display:flex;align-items:flex-start;gap:.7rem;padding:.6rem 1.1rem;border-top:1px solid var(--border)}
+    .att-row .dot{margin-top:.42rem;flex:none}
+    .att-main{flex:1;min-width:0}
+    .att-text{font-size:.88rem;color:var(--text);overflow-wrap:anywhere}
+    .att-meta{font-size:.74rem;color:var(--muted);margin-top:.1rem}
+    .att-meta a{color:var(--info);text-decoration:none}
+    .att-act{flex:none;position:relative}
+    .att-menu summary{list-style:none;cursor:pointer}
+    .att-menu summary::-webkit-details-marker{display:none}
+    .att-menu form{position:absolute;right:0;top:calc(100% + 4px);z-index:20;background:var(--surface);border:1px solid var(--border-strong);
+      border-radius:8px;box-shadow:var(--shadow);display:flex;flex-direction:column;min-width:130px;padding:.25rem}
+    .att-opt{background:none;border:0;text-align:left;padding:.4rem .6rem;border-radius:6px;font:inherit;font-size:.8rem;color:var(--text);cursor:pointer}
+    .att-opt:hover{background:var(--surface3)}
+    .att-clear{display:flex;align-items:center;gap:.6rem;padding:.85rem 1.1rem;font-size:.9rem;color:var(--text2)}
+    .att-clear .ic{color:var(--good);width:18px;height:18px}
+    .att-more{border-top:1px solid var(--border);padding:.2rem 0}
+    .att-more details > summary{cursor:pointer;padding:.45rem 1.1rem;font-size:.78rem;color:var(--muted);font-weight:600}
+    .att-more details[open] > summary{color:var(--text2)}
+    .att-more .att-row,.att-fold .att-row{padding-left:1.6rem}
+    .att-fold{border-top:1px solid var(--border)}
+    .att-fold > details > summary{cursor:pointer;padding:.45rem 1.1rem .45rem 2.1rem;font-size:.78rem;color:var(--info);font-weight:600}
+    .h-why{font-size:.72rem;color:var(--muted);margin:.1rem 0 0 1.55rem;line-height:1.3}
+    @media (max-width:600px){.h-why{display:none}.att-row{padding:.6rem .8rem}}
     .kpi-spark{width:100%;height:26px;display:block}
     .v-good{color:var(--good)}.v-warn{color:var(--warn)}.v-danger{color:var(--danger)}.v-info{color:var(--info)}
 
@@ -1518,16 +1584,62 @@ def _page(body):
 # ── Overview ─────────────────────────────────────────────────────────────────
 
 OVERVIEW_HTML = _page(r"""
-{% if errors %}<div class="error-banner">{{ icon('alert') }} Some data sources failed: {{ errors | join(" · ") }}</div>{% endif %}
 {% call page_head('Network Overview', ui_site ~ ' · ' ~ (ap_total + switch_total) ~ ' managed devices · ' ~ (wifi_count + wired_count) ~ ' clients') %}
   <a class="btn" href="/events">{{ icon('clock', 'ic ic-sm') }} Events</a>
   <a class="btn" href="/topology">{{ icon('topo', 'ic ic-sm') }} Topology</a>
 {% endcall %}
 
+{% set A = ui_attention() %}
+{% macro att_row(i, hidden=false) -%}
+<li class="att-row">
+  <i class="dot {{ i.sev }}"></i>
+  <div class="att-main">
+    <div class="att-text">{{ i.text }}</div>
+    <div class="att-meta"><a href="{{ i.href }}">{{ i.label }} ›</a>{% if i.age >= 300 %} · for {{ i.age | duration }}{% endif %}{% if hidden %} · hidden until {{ i.until | local_time('%-d %b %H:%M') }}{% endif %}</div>
+  </div>
+  {% if hidden %}
+  <form method="post" action="/attention/unsnooze" class="att-act"><input type="hidden" name="key" value="{{ i.key }}"><button class="btn btn-sm" type="submit">Show again</button></form>
+  {% else %}
+  <details class="att-act att-menu">
+    <summary class="btn btn-sm" title="Hide this for a while">Hide</summary>
+    <form method="post" action="/attention/snooze">
+      <input type="hidden" name="key" value="{{ i.key }}"><input type="hidden" name="text" value="{{ i.text }}">
+      {% for d in A.snooze_days %}<button class="att-opt" type="submit" name="days" value="{{ d }}">for {{ d }} day{{ 's' if d != 1 }}</button>{% endfor %}
+    </form>
+  </details>
+  {% endif %}
+</li>
+{%- endmacro %}
+<section class="card att {{ 'att-crit' if A.crit else ('att-warn' if A.warn else 'att-ok') }}" id="attention">
+  {% if A.urgent %}
+  <div class="card-h">
+    <div><div class="card-t">{{ icon('alert') }} Needs attention</div>
+      <div class="card-sub">{% if A.crit %}<span class="danger">{{ A.crit }} critical</span>{% endif %}{% if A.crit and A.warn %} · {% endif %}{% if A.warn %}<span class="warn">{{ A.warn }} warning{{ 's' if A.warn != 1 }}</span>{% endif %} · most urgent first</div></div>
+  </div>
+  <ul class="att-list">{% for i in A.rows %}{% if i.more %}
+    <li class="att-fold"><details><summary>{{ i.more | length }} more from {{ i.label }}</summary><ul class="att-list">{% for j in i.more %}{{ att_row(j) }}{% endfor %}</ul></details></li>
+  {% else %}{{ att_row(i) }}{% endif %}{% endfor %}</ul>
+  {% else %}
+  <div class="att-clear">{{ icon('check') }}<span><b>All clear.</b> Nothing needs attention right now.</span></div>
+  {% endif %}
+  {% if A.notes or A.hidden %}
+  <div class="att-more">
+    {% if A.notes %}
+    <details><summary>{{ A.notes | length }} note{{ 's' if A.notes | length != 1 }} worth knowing</summary>
+      <ul class="att-list">{% for i in A.notes %}{{ att_row(i) }}{% endfor %}</ul></details>
+    {% endif %}
+    {% if A.hidden %}
+    <details><summary>{{ A.hidden | length }} hidden</summary>
+      <ul class="att-list">{% for i in A.hidden %}{{ att_row(i, true) }}{% endfor %}</ul></details>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
 {% set wan_bad = wan_cards | selectattr('status_class', 'equalto', 'danger') | list | length %}
 {% set wan_warn = wan_cards | selectattr('status_class', 'equalto', 'warn') | list | length %}
 {% set wifi_fair = wifi_weak - wifi_poor %}
-<div class="stats">
+<div class="stats stats-slim">
   {% if wan_cards %}
   <a class="stat" href="#internet">
     <div class="stat-l">{{ icon('globe') }} Internet</div>
@@ -1570,10 +1682,11 @@ OVERVIEW_HTML = _page(r"""
     </div>
     <div class="card-b">
       <div class="hlegend"><span><i class="dot danger"></i>Poor / offline</span><span><i class="dot warn"></i>Fair</span><span><i class="dot good"></i>Good</span></div>
-      {% macro hrow(href, ic, label, poor, fair, good) -%}
+      {% macro hrow(href, ic, label, poor, fair, good, row='') -%}
       {% set tot = poor + fair + good %}
+      {% set why = A.why.get(row, []) if row else [] %}
       <tr>
-        <td><a href="{{ href }}">{{ icon(ic) }} {{ label }}</a></td>
+        <td><a href="{{ href }}"{% if why %} title="{{ why | join(' · ') }}"{% endif %}>{{ icon(ic) }} {{ label }}</a>{% if why %}<div class="h-why">{{ why[0] }}{% if why | length > 1 %} <span class="muted">+{{ why | length - 1 }} more</span>{% endif %}</div>{% endif %}</td>
         <td class="bar"><div class="hbar">{% if tot %}<span class="p" style="width:{{ 100*poor/tot }}%"></span><span class="f" style="width:{{ 100*fair/tot }}%"></span><span class="g" style="width:{{ 100*good/tot }}%"></span>{% endif %}</div></td>
         <td class="n {{ 'zero' if not poor }}"><i class="dot danger"></i>{{ poor }}</td>
         <td class="n {{ 'zero' if not fair }}"><i class="dot warn"></i>{{ fair }}</td>
@@ -1583,22 +1696,22 @@ OVERVIEW_HTML = _page(r"""
       <table class="htable">
         <thead><tr><th>Type</th><th></th><th style="text-align:right">Poor</th><th style="text-align:right">Fair</th><th style="text-align:right">Good</th></tr></thead>
         <tbody>
-          {% if wan_cards %}{{ hrow('#internet', 'globe', 'Internet (WAN)', wan_bad, wan_warn, wan_cards|length - wan_bad - wan_warn) }}{% endif %}
+          {% if wan_cards %}{{ hrow('#internet', 'globe', 'Internet (WAN)', wan_bad, wan_warn, wan_cards|length - wan_bad - wan_warn, 'wan') }}{% endif %}
           {% set fws = ui_fw_summary() %}
-          {% if fws %}{{ hrow('/firewall', 'fw', 'Firewall services', fws[0], fws[1], fws[2]) }}{% endif %}
+          {% if fws %}{{ hrow('/firewall', 'fw', 'Firewall services', fws[0], fws[1], fws[2], 'firewall') }}{% endif %}
           {% set pvs = ui_pve_summary() %}
-          {% if pvs %}{{ hrow('/proxmox', 'server', 'Proxmox nodes', pvs[0], pvs[1], pvs[2]) }}{% endif %}
+          {% if pvs %}{{ hrow('/proxmox', 'server', 'Proxmox nodes', pvs[0], pvs[1], pvs[2], 'proxmox') }}{% endif %}
           {% set pbss = ui_pbs_summary() %}
-          {% if pbss %}{{ hrow('/proxmox#backup-server', 'disk', 'Backup datastores', pbss[0], pbss[1], pbss[2]) }}{% endif %}
+          {% if pbss %}{{ hrow('/proxmox#backup-server', 'disk', 'Backup datastores', pbss[0], pbss[1], pbss[2], 'pbs') }}{% endif %}
           {% set nass = ui_nas_summary() %}
-          {% if nass %}{{ hrow('/nas', 'disk', 'NAS disks & volumes', nass[0], nass[1], nass[2]) }}{% endif %}
+          {% if nass %}{{ hrow('/nas', 'disk', 'NAS disks & volumes', nass[0], nass[1], nass[2], 'nas') }}{% endif %}
           {% set svcs = ui_svc_summary() %}
-          {% if svcs %}{{ hrow('/services', 'globe', 'Websites & ports', svcs[0], svcs[1], svcs[2]) }}{% endif %}
+          {% if svcs %}{{ hrow('/services', 'globe', 'Websites & ports', svcs[0], svcs[1], svcs[2], 'services') }}{% endif %}
           {% set mls = ui_mail_summary() %}
-          {% if mls %}{{ hrow('/services', 'mail', 'Mail & newsletters', mls[0], mls[1], mls[2]) }}{% endif %}
-          {{ hrow('/aps', 'ap', 'Access points', ap_total - ap_up, 0, ap_up) }}
-          {{ hrow('/switches', 'switch', 'Switches', switch_total - switch_up, 0, switch_up) }}
-          {{ hrow('/wireless-health', 'wifi', 'Wireless clients', wifi_poor, wifi_fair, wifi_count - wifi_weak) }}
+          {% if mls %}{{ hrow('/services', 'mail', 'Mail & newsletters', mls[0], mls[1], mls[2], 'mail') }}{% endif %}
+          {{ hrow('/aps', 'ap', 'Access points', ap_total - ap_up, 0, ap_up, 'aps') }}
+          {{ hrow('/switches', 'switch', 'Switches', switch_total - switch_up, 0, switch_up, 'switches') }}
+          {{ hrow('/wireless-health', 'wifi', 'Wireless clients', wifi_poor, wifi_fair, wifi_count - wifi_weak, 'wifi') }}
           {{ hrow('/wired', 'devices', 'Wired clients', 0, 0, wired_count) }}
         </tbody>
       </table>
@@ -1744,7 +1857,7 @@ OVERVIEW_HTML = _page(r"""
   <!-- Recent activity -->
   <section class="card c6">
     <div class="card-h">
-      <div><div class="card-t">{{ icon('clock') }} Recent Activity</div><div class="card-sub">Changes and alerts detected by the dashboard</div></div>
+      <div><div class="card-t">{{ icon('clock') }} Recent Activity</div><div class="card-sub">Infrastructure changes and alerts · client failures are under Client Issues</div></div>
       <div class="card-x"><a class="card-link" href="/events">All events ›</a></div>
     </div>
     <div class="card-b flush">
