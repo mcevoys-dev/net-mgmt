@@ -51,6 +51,7 @@ DEFAULTS = {
         "wans": [],
         "top_interfaces": ["lan"],
         "firewall_log_lines": 1000,
+        "ignore_services": [],
     },
     "arp_scan": {"enabled": True, "interval": 300, "interface": ""},
     "proxmox": {
@@ -214,6 +215,12 @@ def load(path=None):
         w["ha_slug"] = w["ha_slug"] or _slug(w["name"])
         wans.append(w)
     cfg["opnsense"]["wans"] = wans
+    ign = cfg["opnsense"]["ignore_services"]
+    if isinstance(ign, str):
+        ign = [ign]
+    if not isinstance(ign, list) or not all(isinstance(x, str) for x in ign):
+        raise ConfigError("opnsense.ignore_services should be a list of service names")
+    cfg["opnsense"]["ignore_services"] = ign
 
     links = []
     for i, ln in enumerate(cfg["links"] or []):

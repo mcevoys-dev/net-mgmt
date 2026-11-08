@@ -508,7 +508,7 @@ def firewall_view(g):
                      "inbound_ports": [], "outbound_devices": [], "outbound_targets": [], "by_rule": [],
                      "recent_blocks": [], "by_interface": [], "state_rate": None, **(s.get("firewall") or {})}
     h, fw, svc = s["health"], s["firmware"], s.get("services") or []
-    stopped = [x for x in svc if not x["running"]]
+    stopped = [x for x in svc if not x["running"] and not x.get("ignored")]
     notes = []
     if stopped:
         notes.append(("danger", f"{len(stopped)} service{'s' if len(stopped) != 1 else ''} stopped: "
@@ -588,6 +588,15 @@ def proxmox_view(g):
     for st in s["storage"]:
         if st["status"] != "available":
             notes.append(("warn", f"Storage {st['name']} on {st['node']} reports status '{st['status']}'."))
+        elif st.get("written") is not None:
+            where = f"{st['name']}{'' if st['shared'] else ' on ' + st['node']}"
+            if st["written"] >= cfgp.storage_warn_pct:
+                notes.append(("warn", f"Storage {where} is {st['written']}% full: pool {st['pool']} has "
+                                      f"{st['pool_free_gb']} GB free."))
+            elif (st["used"] or 0) >= cfgp.storage_warn_pct:
+                notes.append(("info", f"Storage {where} is {st['used']}% reserved but only {st['written']}% written: "
+                                      f"its VM disks are thick-provisioned, so about {st['free_gb']} GB is left for "
+                                      "new disks or snapshots. Thin provisioning (Datacenter → Storage) frees it for new disks."))
         elif (st["used"] or 0) >= cfgp.storage_warn_pct:
             notes.append(("warn", f"Storage {st['name']}{'' if st['shared'] else ' on ' + st['node']} is {st['used']}% full "
                                   f"({st['free_gb']} GB free)."))
@@ -603,7 +612,8 @@ def proxmox_view(g):
         notes.append(("danger", f"Last poll failed: {s['error']}"))
     order = {"danger": 0, "warn": 1, "info": 2}
     notes.sort(key=lambda x: order[x[0]])
-    storage_sorted = sorted(s["storage"], key=lambda x: (x["used"] is None, -(x["used"] or 0)))
+    eff = lambda x: x.get("written") if x.get("written") is not None else x["used"]
+    storage_sorted = sorted(s["storage"], key=lambda x: (eff(x) is None, -(eff(x) or 0)))
     return {**s, "pending": False, "notes": notes, "bad_repl": bad_repl, "stale": stale,
             "storage_sorted": storage_sorted,
             "warn_pct": cfgp.storage_warn_pct, "max_age_h": cfgp.backup_max_age_hours}
@@ -1050,6 +1060,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
     .att-more .att-row,.att-fold .att-row{padding-left:1.6rem}
     .att-fold{border-top:1px solid var(--border)}
     .att-fold > details > summary{cursor:pointer;padding:.45rem 1.1rem .45rem 2.1rem;font-size:.78rem;color:var(--info);font-weight:600}
+    .mbar-resv{position:relative}.mbar-resv > i{position:absolute;left:0;top:0;bottom:0;border-radius:inherit;background:repeating-linear-gradient(135deg,var(--border-strong) 0 3px,transparent 3px 6px)}.mbar-resv > span{position:relative}
     .h-why{font-size:.72rem;color:var(--muted);margin:.1rem 0 0 1.55rem;line-height:1.3}
     @media (max-width:600px){.h-why{display:none}.att-row{padding:.6rem .8rem}}
     .kpi-spark{width:100%;height:26px;display:block}
@@ -1057,7 +1068,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
 
     /* status dots / pills */
     .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;background:var(--muted)}
-    .dot.good{background:var(--good)}.dot.warn{background:var(--warn-dot)}.dot.danger{background:var(--danger-dot)}.dot.info{background:var(--info)}
+    .dot.good{background:var(--good)}.dot.warn{background:var(--warn-dot)}.dot.danger{background:var(--danger-dot)}.dot.info{background:var(--info)}.dot.muted{background:var(--border-strong)}
     .status{display:inline-flex;align-items:center;gap:.4rem;font-size:.8rem;font-weight:500}
     .pill{display:inline-flex;align-items:center;gap:.3rem;border-radius:5px;padding:.08rem .45rem;font-size:.72rem;font-weight:600;white-space:nowrap}
     .pill-good{background:var(--good-soft);color:var(--good)}
@@ -2864,14 +2875,15 @@ FIREWALL_HTML = _page(r"""
 <div class="grid">
   <section class="card c5">
     <div class="card-h"><div><div class="card-t">{{ icon('check') }} Services</div>
-      <div class="card-sub">{{ v.services | selectattr('running') | list | length }} of {{ v.services | length }} running{% if h.boottime %} · booted {{ h.boottime }}{% endif %}</div></div></div>
+      <div class="card-sub">{{ v.services | selectattr('running') | list | length }} of {{ v.services | rejectattr('ignored') | list | length }} running{% set ign = v.services | selectattr('ignored') | list | length %}{% if ign %} · {{ ign }} ignored{% endif %}{% if h.boottime %} · booted {{ h.boottime }}{% endif %}</div></div></div>
     <div class="card-b flush">
       {% if v.services %}
       <table class="t"><tbody>
         {% for sv in v.services %}
-        <tr><td style="width:1%"><i class="dot {{ 'good' if sv.running else 'danger' }}"></i></td>
-            <td style="padding-left:0"><span class="{{ '' if sv.running else 'danger' }}" style="font-weight:{{ 400 if sv.running else 700 }}">{{ sv.description }}</span></td>
-            <td class="r muted" style="font-size:.76rem">{{ 'running' if sv.running else 'stopped' }}</td></tr>
+        {% set bad = not sv.running and not sv.ignored %}
+        <tr><td style="width:1%"><i class="dot {{ 'good' if sv.running else ('danger' if bad else 'muted') }}"></i></td>
+            <td style="padding-left:0"><span class="{{ 'danger' if bad else ('muted' if sv.ignored else '') }}" style="font-weight:{{ 700 if bad else 400 }}">{{ sv.description }}</span></td>
+            <td class="r muted" style="font-size:.76rem">{{ 'running' if sv.running else ('stopped · ignored' if sv.ignored else 'stopped') }}</td></tr>
         {% endfor %}
       </tbody></table>
       {% else %}<div class="empty">No service data yet.</div>{% endif %}
@@ -3082,9 +3094,17 @@ PROXMOX_HTML = _page(r"""
       <div class="mlist" style="gap:.55rem">
         {% for st in v.storage_sorted %}
         <div class="mrow"><span class="mrow-l" style="font-weight:500">{{ st.name }} <span class="muted mono" style="font-size:.72rem">{{ 'shared' if st.shared else st.node }} · {{ st.type }}</span>{% if st.status != 'available' %} <span class="pill pill-warn">{{ st.status }}</span>{% endif %}</span>
-          <span class="mrow-v {{ 'danger' if (st.used or 0) >= 95 else ('warn' if (st.used or 0) >= v.warn_pct else '') }}">{{ (st.used ~ '%') if st.used is not none else '—' }}</span>
-          <div class="mbar {{ 'bad' if (st.used or 0) >= 95 else ('warn' if (st.used or 0) >= v.warn_pct else 'info') }}"><span style="width:{{ [st.used or 0, 1] | max }}%"></span></div>
+          {% set fill = st.get('written') if st.get('written') is not none else st.used %}
+          {% set lvl = 'danger' if (fill or 0) >= 95 else ('warn' if (fill or 0) >= v.warn_pct else '') %}
+          {% if st.get('written') is not none %}
+          <span class="mrow-v {{ lvl }}" title="Written: data the pool actually holds. Reserved: space set aside for thick-provisioned disks, as Proxmox counts it.">{{ st.written }}% <span class="muted" style="font-weight:500;font-size:.75rem">written · {{ st.used }}% reserved</span></span>
+          <div class="mbar {{ 'bad' if lvl == 'danger' else (lvl or 'info') }} mbar-resv"><i style="width:{{ [st.used or 0, 1] | max }}%"></i><span style="width:{{ [st.written or 0, 1] | max }}%"></span></div>
+          <span class="mrow-s">pool {{ st.pool }}: {{ st.pool_free_gb }} GB free of {{ st.pool_size_gb }} GB · {{ st.free_gb }} GB left for new disks</span></div>
+          {% else %}
+          <span class="mrow-v {{ lvl }}">{{ (st.used ~ '%') if st.used is not none else '—' }}</span>
+          <div class="mbar {{ 'bad' if lvl == 'danger' else (lvl or 'info') }}"><span style="width:{{ [st.used or 0, 1] | max }}%"></span></div>
           {% if st.total_gb %}<span class="mrow-s">{{ st.free_gb }} GB free of {{ st.total_gb }} GB</span>{% endif %}</div>
+          {% endif %}
         {% endfor %}
       </div>
     </div>

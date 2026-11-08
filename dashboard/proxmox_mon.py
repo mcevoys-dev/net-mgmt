@@ -62,6 +62,11 @@ def _pct(used, total):
     return round(100 * used / total) if total else None
 
 
+def _eff(s):
+    """The fill level that matters: data actually written for ZFS, else Proxmox's used %."""
+    return s.get("written") if s.get("written") is not None else s.get("used")
+
+
 class ProxmoxMonitor:
     def __init__(self, hosts, token_reader, verify_tls=False, poll_seconds=60,
                  backup_scan_seconds=900, backup_max_age_hours=26, storage_warn_pct=85,
@@ -195,6 +200,7 @@ class ProxmoxMonitor:
                 "free_gb": round(((r.get("maxdisk") or 0) - (r.get("disk") or 0)) / 2 ** 30),
                 "total_gb": round((r.get("maxdisk") or 0) / 2 ** 30),
             })
+        self._zfs_written(storage, online_names)
         # shared storage is reported once per node; keep one row
         seen, uniq = set(), []
         for s in sorted(storage, key=lambda s: (s["shared"], s["name"], s["node"])):
@@ -333,6 +339,34 @@ class ProxmoxMonitor:
                          "orphans": [{"vmid": v, "age_days": round((now - t) / 86400)} for v, t in sorted(latest.items())]}
         self._last_scan = now
 
+    def _zfs_written(self, storage, online):
+        """ZFS storage: Proxmox's used % counts space reserved by thick-provisioned
+        disks. Add what the pool has actually written (zpool alloc / size), so the
+        page can show both and warn on the real figure."""
+        zfs = [s for s in storage if s["type"] == "zfspool" and s["node"] in online]
+        if not zfs:
+            return
+        try:
+            pools = {c["storage"]: (c.get("pool") or "").split("/")[0] for c in self.get("/storage") or []}
+        except Exception:
+            return
+        cache = {}
+        for s in zfs:
+            pool = pools.get(s["name"])
+            if not pool:
+                continue
+            if s["node"] not in cache:
+                try:
+                    cache[s["node"]] = {p["name"]: p for p in self.get(f"/nodes/{s['node']}/disks/zfs") or []}
+                except Exception:
+                    cache[s["node"]] = {}
+            p = cache[s["node"]].get(pool)
+            if p and p.get("size"):
+                s["pool"] = pool
+                s["written"] = _pct(p.get("alloc"), p["size"])
+                s["pool_free_gb"] = round((p.get("free") or 0) / 2 ** 30)
+                s["pool_size_gb"] = round(p["size"] / 2 ** 30)
+
     # ── change detection → Events ────────────────────────────────────────
     def _compare(self, v):
         prev, ev = self._prev, self.on_event
@@ -341,7 +375,7 @@ class ProxmoxMonitor:
             "nodes": {n["name"]: (n["online"], n["uptime"]) for n in v["nodes"]},
             "ha": {s["sid"]: (s["node"], s["state"]) for s in v["ha"]["services"]},
             "repl": {j["id"]: j["fail_count"] for j in v["replication"]},
-            "storage": {(s["name"], s["node"]): (s["used"] or 0) >= self.storage_warn for s in v["storage"]},
+            "storage": {(s["name"], s["node"]): (_eff(s) or 0) >= self.storage_warn for s in v["storage"]},
         }
         new_tasks = {t["upid"] for t in v["failed_tasks"]}
         if prev is not None:

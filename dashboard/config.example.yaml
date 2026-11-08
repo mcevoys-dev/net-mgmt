@@ -54,6 +54,7 @@ opnsense:
   url: https://192.168.1.1        # include :port if the web UI is not on 443
   key_file: opnsense_apikey.txt   # the key file OPNsense downloads (key=/secret=)
   verify_tls: false               # true if the firewall has a trusted certificate
+  # ignore_services: [radvd, dhcpd6]   # services you never run (here IPv6): not flagged when stopped
   # Optional: name and order your WAN links. "gateway" is the gateway name in
   # System > Gateways; "interface" is the device (igb0, em0, vtnet0...), used
   # for the traffic graphs. Leave the list out to show gateways as reported.

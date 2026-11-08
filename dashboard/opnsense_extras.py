@@ -30,11 +30,14 @@ def _num(v):
 
 class OPNsenseExtras:
     def __init__(self, get_json, lan_subnets, top_interfaces=("lan",), log_lines=1000,
-                 fast_seconds=60, log_seconds=300, firmware_seconds=900, on_event=None):
+                 fast_seconds=60, log_seconds=300, firmware_seconds=900, on_event=None,
+                 ignore_services=()):
         self.get = get_json
         self.lan = [ipaddress.ip_network(n) for n in lan_subnets]
         self.top_interfaces = list(top_interfaces)
         self.log_lines = int(log_lines)
+        # services you never run (e.g. IPv6 ones): not flagged when stopped
+        self.ignore = {s.strip().lower() for s in ignore_services or () if s.strip()}
         self.fast_seconds, self.log_seconds, self.firmware_seconds = fast_seconds, log_seconds, firmware_seconds
         self.on_event = on_event or (lambda kind, sev, msg: None)
         self._lock = threading.Lock()
@@ -130,16 +133,20 @@ class OPNsenseExtras:
         rows = self.get("/api/core/service/search").get("rows", [])
         out = [{"name": r.get("name") or r.get("id"), "description": r.get("description") or r.get("name"),
                 "running": bool(int(r.get("running", 0) or 0)), "id": r.get("id")} for r in rows]
+        for s in out:
+            s["ignored"] = bool(self.ignore & {str(s[k]).lower() for k in ("name", "description", "id") if s[k]})
         running = {s["id"]: s["running"] for s in out}
         if self._prev_running is not None:
             for sid, up in running.items():
+                if any(s["ignored"] for s in out if s["id"] == sid):
+                    continue
                 was = self._prev_running.get(sid)
                 if was is True and not up:
                     self.on_event("service", "crit", f"Firewall service '{self._label(out, sid)}' stopped")
                 elif was is False and up:
                     self.on_event("service", "info", f"Firewall service '{self._label(out, sid)}' started")
         self._prev_running = running
-        return sorted(out, key=lambda s: (s["running"], s["description"].lower()))
+        return sorted(out, key=lambda s: (s["ignored"], s["running"], s["description"].lower()))
 
     @staticmethod
     def _label(services, sid):

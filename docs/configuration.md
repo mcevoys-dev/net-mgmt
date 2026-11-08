@@ -64,6 +64,7 @@ with a message naming the setting, so a typo never fails silently.
 | `wans` | `[]` | Optional list describing your WAN links, in display order (below) |
 | `top_interfaces` | `[lan]` | OPNsense interface names (as in its config: `lan`, `opt1`…) whose busiest devices the Firewall page shows |
 | `firewall_log_lines` | `1000` | How many recent firewall log entries the blocked-traffic summary reads (every 5 minutes) |
+| `ignore_services` | `[]` | Services you never run, by name or description as OPNsense lists them (for example `[radvd, dhcpd6]` when you do not use IPv6). They are shown as ignored and never flagged when stopped |
 
 Each entry in `wans`:
 

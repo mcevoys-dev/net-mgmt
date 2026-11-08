@@ -436,6 +436,7 @@ OPN_EXTRAS = OPNsenseExtras(
     CFG.site.lan_subnets,
     top_interfaces=CFG.opnsense.top_interfaces,
     log_lines=CFG.opnsense.firewall_log_lines,
+    ignore_services=CFG.opnsense.ignore_services,
     on_event=lambda kind, sev, msg: _event_log.add(kind, sev, msg),
 ) if CFG.opnsense.enabled else None
 
