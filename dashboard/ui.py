@@ -649,6 +649,17 @@ def _is_private_host(host):
         return host in ("localhost",) or host.endswith((".local", ".lan", ".home.arpa"))
 
 
+# Browser-tab icon: the sidebar's teal tile with a small network (one hub, three
+# devices). ?s=danger or ?s=warn adds a status dot; the Overview sets it.
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#01a982"/><stop offset="1" stop-color="#0b6e8f"/></linearGradient></defs>
+<rect width="32" height="32" rx="7" fill="url(#g)"/>
+<g stroke="#fff" stroke-width="2.2" stroke-linecap="round" fill="none"><path d="M16 11v5M7.5 21v-2.5h17V21M16 16v5"/></g>
+<g fill="#fff"><rect x="11" y="5" width="10" height="7" rx="2"/><circle cx="7.5" cy="23.5" r="3.2"/><circle cx="16" cy="23.5" r="3.2"/><circle cx="24.5" cy="23.5" r="3.2"/></g>
+{dot}</svg>"""
+FAVICON_DOTS = {"danger": "#e5484d", "warn": "#f2b01e"}
+
+
 def install(app, g):
     """Register template helpers. `g` is app.py's globals()."""
     cfg = g["CFG"]
@@ -742,6 +753,16 @@ def install(app, g):
 
     app.add_url_rule("/attention/snooze", "attention_snooze", attention_snooze, methods=["POST"])
     app.add_url_rule("/attention/unsnooze", "attention_unsnooze", attention_unsnooze, methods=["POST"])
+
+    def favicon():
+        from flask import Response
+        colour = FAVICON_DOTS.get(request.args.get("s", ""))
+        dot = f'<circle cx="24.5" cy="7.5" r="6" fill="{colour}" stroke="#fff" stroke-width="1.5"/>' if colour else ""
+        return Response(FAVICON_SVG.replace("{dot}", dot), mimetype="image/svg+xml",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+    app.add_url_rule("/favicon.svg", "favicon_svg", favicon)
+    app.add_url_rule("/favicon.ico", "favicon_ico", favicon)
 
     @app.context_processor
     def _ui_context():
@@ -846,6 +867,7 @@ BASE_HTML = r"""{%- macro page_head(title, sub='') -%}
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>{{ title }} · {{ ui_site }}</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
   <script>
     (function(){
       try {
@@ -1646,6 +1668,7 @@ OVERVIEW_HTML = _page(r"""
   </div>
   {% endif %}
 </section>
+{% if A.crit or A.warn %}<script>document.querySelector('link[rel=icon]').href='/favicon.svg?s={{ 'danger' if A.crit else 'warn' }}';</script>{% endif %}
 
 {% set wan_bad = wan_cards | selectattr('status_class', 'equalto', 'danger') | list | length %}
 {% set wan_warn = wan_cards | selectattr('status_class', 'equalto', 'warn') | list | length %}
